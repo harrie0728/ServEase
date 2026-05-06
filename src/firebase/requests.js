@@ -2,6 +2,7 @@ import {
   addDoc,
   collection,
   doc,
+  getDoc,
   getDocs,
   query,
   serverTimestamp,
@@ -9,6 +10,7 @@ import {
   where
 } from "firebase/firestore";
 import { db } from "./config";
+import { createNotification } from "./notifications";
 
 export async function createServiceRequest({
   userId,
@@ -46,6 +48,13 @@ export async function createServiceRequest({
   };
 
   const docRef = await addDoc(collection(db, "requests"), payload);
+  await createNotification({
+    userId,
+    title: "Request Submitted",
+    body: `Your ${serviceLabel} request has been sent to ${provider.name}.`,
+    type: "request-created",
+    requestId: docRef.id
+  });
   return docRef.id;
 }
 
@@ -78,6 +87,17 @@ export async function updateCustomerRequestSchedule(requestId, payload) {
     "statusHistory.requested": serverTimestamp(),
     updatedAt: serverTimestamp()
   });
+
+  const request = (await getDoc(doc(db, "requests", requestId))).data();
+  if (request?.userId) {
+    await createNotification({
+      userId: request.userId,
+      title: "Request Rescheduled",
+      body: `Your ${request.serviceLabel || "service"} request was rescheduled to ${payload.preferredDate} at ${payload.preferredTime}.`,
+      type: "request-rescheduled",
+      requestId
+    });
+  }
 }
 
 export async function cancelCustomerRequest(requestId) {
@@ -85,6 +105,17 @@ export async function cancelCustomerRequest(requestId) {
     status: "cancelled",
     updatedAt: serverTimestamp()
   });
+
+  const request = (await getDoc(doc(db, "requests", requestId))).data();
+  if (request?.userId) {
+    await createNotification({
+      userId: request.userId,
+      title: "Request Cancelled",
+      body: `Your ${request.serviceLabel || "service"} request has been cancelled.`,
+      type: "request-cancelled",
+      requestId
+    });
+  }
 }
 
 export async function attachProofToRequest(requestId, proofPhotos) {
@@ -102,6 +133,17 @@ export async function saveRequestReview(requestId, payload) {
     reviewAnonymous: payload.anonymous,
     updatedAt: serverTimestamp()
   });
+
+  const request = (await getDoc(doc(db, "requests", requestId))).data();
+  if (request?.userId) {
+    await createNotification({
+      userId: request.userId,
+      title: "Review Posted",
+      body: `Your review for ${request.providerName || "your worker"} has been saved.`,
+      type: "review-posted",
+      requestId
+    });
+  }
 }
 
 export async function getReviewsForProvider(providerUid) {

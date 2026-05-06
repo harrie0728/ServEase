@@ -22,6 +22,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import { signInWithFirebase, signOutFromFirebase, signUpWithFirebase } from "./src/firebase/auth";
 import { auth } from "./src/firebase/config";
 import { getRequestsForProvider, updateProviderRequestStatus } from "./src/firebase/providerRequests";
+import { getNotificationsForUser, markNotificationsRead } from "./src/firebase/notifications";
 import {
   cancelCustomerRequest,
   createServiceRequest,
@@ -41,7 +42,7 @@ import {
   deleteUserAccount,
   addReviewToProvider
 } from "./src/firebase/users";
-import { uploadProfilePhoto, uploadProofPhoto } from "./src/firebase/storage";
+import { getInlineImageData, getInlineProfileImageData } from "./src/firebase/storage";
 
 const theme = {
   blue: "#1f7fc7",
@@ -57,6 +58,7 @@ const theme = {
 };
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
+const MAX_PROOF_INLINE_BYTES = 850000;
 
 const serviceShortcuts = [
   {
@@ -441,14 +443,19 @@ function SignUpScreen({ onSignUp, onGoSignIn, values, onChangeText, errorMessage
   );
 }
 
-function HeaderArea({ mutedBell = false, onMenuPress, onBellPress }) {
+function HeaderArea({ unreadCount = 0, onMenuPress, onBellPress }) {
   return (
     <LinearGradient colors={["#134f80", "#2c85c6", "#87bee9"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.headerArea}>
       <Image source={{ uri: featuredImages.hero }} style={styles.heroImage} />
       <View style={styles.headerOverlay} />
       <View style={styles.headerIcons}>
-        <Pressable onPress={onBellPress}>
-          <Ionicons name={mutedBell ? "notifications-off-outline" : "notifications-outline"} size={24} color="#fff" />
+        <Pressable onPress={onBellPress} style={styles.headerBellButton}>
+          <Ionicons name="notifications-outline" size={24} color="#fff" />
+          {unreadCount > 0 ? (
+            <View style={styles.headerBellBadge}>
+              <Text style={styles.headerBellBadgeText}>{unreadCount > 9 ? "9+" : unreadCount}</Text>
+            </View>
+          ) : null}
         </Pressable>
         <Pressable onPress={onMenuPress}>
           <Feather name="menu" size={24} color="#fff" />
@@ -509,12 +516,12 @@ function ServiceList({ onSelect }) {
 }
 
 function DashboardScreen({
-  mutedBell = false,
+  unreadCount = 0,
   showLocationModal = false,
   menuVisible = false,
   onEnableLocation,
   onLater,
-  onToggleBell,
+  onOpenNotifications,
   onOpenService,
   onOpenOffer,
   onOpenHistory,
@@ -537,7 +544,7 @@ function DashboardScreen({
 
   return (
     <View style={styles.dashboardScreen}>
-      <HeaderArea mutedBell={mutedBell} onBellPress={onToggleBell} onMenuPress={onMenuPress} />
+      <HeaderArea unreadCount={unreadCount} onBellPress={onOpenNotifications} onMenuPress={onMenuPress} />
       <ScrollView contentContainerStyle={styles.dashboardContent}>
         <FeaturedCarousel />
         <Text style={styles.sectionTitle}>Offered Services</Text>
@@ -808,6 +815,56 @@ function ProofPhotoGallery({ photos = [], imageStyle, emptyText }) {
   );
 }
 
+function ProofPhotoViewerButton({
+  photos = [],
+  buttonLabel = "Pictures Proof",
+  emptyText = "No proof photos uploaded yet.",
+  title = "Proof of Service Photos"
+}) {
+  const [visible, setVisible] = useState(false);
+  const [selectedPhoto, setSelectedPhoto] = useState(null);
+
+  if (!photos.length) {
+    return emptyText ? <Text style={styles.providerEmptyText}>{emptyText}</Text> : null;
+  }
+
+  return (
+    <>
+      <PrimaryButton title={buttonLabel} onPress={() => setVisible(true)} style={styles.proofViewerButton} textStyle={styles.historyEntryButtonText} />
+      <Modal transparent visible={visible} animationType="fade">
+        <View style={styles.profileModalBackdrop}>
+          <AnimatedPopup style={styles.proofViewerModalCard}>
+            <Text style={styles.reviewFormTitle}>{title}</Text>
+            <ScrollView contentContainerStyle={styles.proofViewerScroll}>
+              {photos.map((photo, index) => (
+                <Pressable
+                  key={`${typeof photo === "string" ? photo : photo?.uri}-${index}`}
+                  onPress={() => setSelectedPhoto(typeof photo === "string" ? photo : photo?.uri)}
+                >
+                  <Image
+                    source={{ uri: typeof photo === "string" ? photo : photo?.uri }}
+                    style={styles.proofViewerImage}
+                    resizeMode="contain"
+                  />
+                </Pressable>
+              ))}
+            </ScrollView>
+            <PrimaryButton title="Close" onPress={() => setVisible(false)} style={[styles.equalActionButton, styles.equalActionButtonSecondary]} textStyle={styles.historyEntryButtonText} />
+          </AnimatedPopup>
+        </View>
+      </Modal>
+      <Modal transparent visible={!!selectedPhoto} animationType="fade">
+        <View style={styles.fullscreenProofBackdrop}>
+          <Pressable style={styles.fullscreenProofClose} onPress={() => setSelectedPhoto(null)}>
+            <Ionicons name="close-circle" size={34} color="#fff" />
+          </Pressable>
+          {selectedPhoto ? <Image source={{ uri: selectedPhoto }} style={styles.fullscreenProofImage} resizeMode="contain" /> : null}
+        </View>
+      </Modal>
+    </>
+  );
+}
+
 function CompletionProofModal({ visible, photos, errorMessage, onPickPhotos, onClose, onSubmit, isSubmitting }) {
   return (
     <Modal transparent visible={visible} animationType="fade">
@@ -972,9 +1029,7 @@ function RequestStatusScreen({
               </View>
               {activeStep === "completed" ? (
                 <>
-                  <Pressable onPress={onProof}>
-                    <Text style={styles.proofLink}>View proof of service</Text>
-                  </Pressable>
+                  <ProofPhotoViewerButton photos={request?.proofPhotos || []} buttonLabel="Pictures Proof" title="Proof of Service" />
                   <PrimaryButton title="LEAVE A REVIEW" onPress={onLeaveReview} style={styles.leaveReviewButton} textStyle={styles.leaveReviewText} />
                 </>
               ) : null}
@@ -983,8 +1038,7 @@ function RequestStatusScreen({
             </>
           ) : (
             <>
-              <PrimaryButton title="Proof of Service" onPress={() => {}} style={styles.proofTitleButton} textStyle={styles.statusMiniText} />
-              <ProofPhotoGallery photos={request?.proofPhotos || []} imageStyle={styles.proofImage} emptyText="No proof photos uploaded yet." />
+              <ProofPhotoViewerButton photos={request?.proofPhotos || []} buttonLabel="Pictures Proof" title="Proof of Service" />
             </>
           )}
         </View>
@@ -1036,7 +1090,11 @@ function HistoryEntry({ title, buttonTitle, onPress, request, isWorkerHistory = 
           </View>
         </View>
         <PrimaryButton title={buttonTitle} onPress={onPress} style={styles.historyEntryButton} textStyle={styles.historyEntryButtonText} />
-        <ProofPhotoGallery photos={request?.proofPhotos || []} imageStyle={isWorkerHistory ? styles.workerHistoryProofImage : styles.historyProofImage} />
+        <ProofPhotoViewerButton
+          photos={request?.proofPhotos || []}
+          buttonLabel={isWorkerHistory ? "View Submitted Proof" : "Pictures Proof"}
+          title="Proof of Service"
+        />
       </View>
     </View>
   );
@@ -1204,7 +1262,9 @@ function ProfileScreen({
   onChange,
   onPickPhoto,
   onSave,
-  onDeleteAccount
+  onDeleteAccount,
+  photoUploadLoading = false,
+  uploadError = ""
 }) {
   return (
     <View style={styles.serviceScreen}>
@@ -1226,10 +1286,17 @@ function ProfileScreen({
             )}
           </View>
           {!isProvider ? (
-            <PrimaryButton title="Upload Profile Picture" onPress={onPickPhoto} style={styles.workerActionButton} textStyle={styles.historyEntryButtonText} />
+            <PrimaryButton
+              title={photoUploadLoading ? "Uploading Photo..." : "Upload Profile Picture"}
+              onPress={onPickPhoto}
+              style={styles.workerActionButton}
+              textStyle={styles.historyEntryButtonText}
+              disabled={photoUploadLoading}
+            />
           ) : (
             <Text style={styles.providerEmptyText}>Profile picture updates for workers are managed by the web developer.</Text>
           )}
+          {!isProvider && uploadError ? <Text style={styles.formErrorText}>{uploadError}</Text> : null}
           <Text style={styles.requestFieldLabel}>NAME:</Text>
           <TextInput
             style={styles.fieldInput}
@@ -1278,6 +1345,38 @@ function ProfileScreen({
             <Text style={styles.providerEmptyText}>Worker services: {profile.serviceTypes.join(", ")}</Text>
           ) : null}
         </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+function NotificationScreen({ onBack, notifications, loading, onOpenRequest }) {
+  return (
+    <View style={styles.serviceScreen}>
+      <Image source={{ uri: featuredImages.formBg }} style={styles.serviceBgImage} />
+      <View style={styles.serviceBgOverlay} />
+      <ScrollView contentContainerStyle={styles.serviceScroll}>
+        <Pressable onPress={onBack} style={styles.formBackIcon}>
+          <Ionicons name="arrow-back-circle-outline" size={28} color="#1f1f1f" />
+        </Pressable>
+        <View style={styles.workerPanel}>
+          <Text style={styles.workerPanelTitle}>Notifications</Text>
+          <Text style={styles.workerPanelText}>
+            {loading ? "Loading notifications..." : notifications.length ? "Tap a notification to open its request." : "No notifications yet."}
+          </Text>
+        </View>
+        {notifications.map((item) => (
+          <Pressable key={item.id} style={[styles.notificationCard, !item.read && styles.notificationCardUnread]} onPress={() => onOpenRequest(item)}>
+            <View style={styles.notificationTop}>
+              <Text style={styles.notificationTitle}>{item.title}</Text>
+              {!item.read ? <View style={styles.notificationUnreadDot} /> : null}
+            </View>
+            <Text style={styles.notificationBody}>{item.body}</Text>
+            <Text style={styles.notificationTime}>
+              {formatFirestoreDate(item.createdAt)} {formatFirestoreTime(item.createdAt)}
+            </Text>
+          </Pressable>
+        ))}
       </ScrollView>
     </View>
   );
@@ -1442,7 +1541,7 @@ function ProviderRequestDetailScreen({ request, onBack, onUpdateStatus, onCancel
             textStyle={styles.historyEntryButtonText}
             disabled={["on-the-way", "started", "completed", "cancelled"].includes(request.status)}
           />
-          <ProofPhotoGallery photos={request.proofPhotos || []} imageStyle={styles.workerHistoryProofImage} />
+          <ProofPhotoViewerButton photos={request.proofPhotos || []} buttonLabel="View Submitted Proof" title="Proof of Service" />
         </View>
       </ScrollView>
     </View>
@@ -1453,7 +1552,6 @@ export default function App() {
   const [screen, setScreen] = useState("start");
   const [navDirection, setNavDirection] = useState("forward");
   const [locationPromptVisible, setLocationPromptVisible] = useState(true);
-  const [mutedBell, setMutedBell] = useState(false);
   const [selectedServiceKey, setSelectedServiceKey] = useState("plumbing");
   const [selectedProviderName, setSelectedProviderName] = useState("Juan Dela Cruz");
   const [providerOverlay, setProviderOverlay] = useState(null);
@@ -1469,6 +1567,8 @@ export default function App() {
   const [signInForm, setSignInForm] = useState({ email: "", password: "" });
   const [signUpForm, setSignUpForm] = useState({ email: "", password: "", confirmPassword: "" });
   const [profileForm, setProfileForm] = useState({ displayName: "", bio: "", skills: "", strengths: "", photoURL: "" });
+  const [profilePhotoUploading, setProfilePhotoUploading] = useState(false);
+  const [profilePhotoError, setProfilePhotoError] = useState("");
   const [newAccountName, setNewAccountName] = useState("");
   const [requestForm, setRequestForm] = useState(emptyRequestForm);
   const [requestError, setRequestError] = useState("");
@@ -1492,6 +1592,8 @@ export default function App() {
   const [completionProofPhotos, setCompletionProofPhotos] = useState([]);
   const [completionSubmitting, setCompletionSubmitting] = useState(false);
   const [completionProofError, setCompletionProofError] = useState("");
+  const [notifications, setNotifications] = useState([]);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
   const pageTranslate = useRef(new Animated.Value(0)).current;
 
   const selectedService = serviceShortcuts.find((item) => item.key === selectedServiceKey) || serviceShortcuts[0];
@@ -1534,6 +1636,18 @@ export default function App() {
       setOngoingRequest(ongoing);
     } finally {
       setCustomerRequestsLoading(false);
+    }
+  };
+
+  const loadNotifications = async (userId = currentUser?.uid || "") => {
+    if (!userId) return [];
+    try {
+      setNotificationsLoading(true);
+      const items = await getNotificationsForUser(userId);
+      setNotifications(items);
+      return items;
+    } finally {
+      setNotificationsLoading(false);
     }
   };
 
@@ -1592,6 +1706,7 @@ export default function App() {
   };
 
   const updateProfileForm = (key, value) => {
+    setProfilePhotoError("");
     setProfileForm((current) => ({ ...current, [key]: value }));
   };
 
@@ -1647,13 +1762,16 @@ export default function App() {
   const pickProfilePhoto = async () => {
     if (!currentUser) return;
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) return;
+    if (!permission.granted) {
+      setProfilePhotoError("Photo library permission is required to upload a profile picture.");
+      return;
+    }
 
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images"],
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.8,
+      quality: 0.5,
       base64: true
     });
 
@@ -1663,10 +1781,18 @@ export default function App() {
     const uri = asset?.uri;
     if (!uri) return;
 
-    const uploadedUrl = await uploadProfilePhoto(currentUser.uid, asset);
-    await updateUserProfile(currentUser.uid, { photoURL: uploadedUrl });
-    setCurrentUserProfile((current) => ({ ...current, photoURL: uploadedUrl }));
-    setProfileForm((current) => ({ ...current, photoURL: uploadedUrl }));
+    try {
+      setProfilePhotoUploading(true);
+      setProfilePhotoError("");
+      const inlinePhoto = await getInlineProfileImageData(asset);
+      await updateUserProfile(currentUser.uid, { photoURL: inlinePhoto });
+      setCurrentUserProfile((current) => ({ ...current, photoURL: inlinePhoto }));
+      setProfileForm((current) => ({ ...current, photoURL: inlinePhoto }));
+    } catch (error) {
+      setProfilePhotoError(normalizeFirebaseError(error));
+    } finally {
+      setProfilePhotoUploading(false);
+    }
   };
 
   const saveProfile = async () => {
@@ -1798,6 +1924,7 @@ export default function App() {
       const exactRequest = refreshedRequests.find((item) => item.id === requestId) || optimisticRequest;
       setCustomerRequests(refreshedRequests.length ? refreshedRequests : [optimisticRequest]);
       setOngoingRequest(exactRequest.status === "requested" ? exactRequest : optimisticRequest);
+      await loadNotifications(currentUser.uid);
       setSelectedProviderName(providerToUse?.name || "");
       setSelectedCustomerRequest(exactRequest);
       setStatusStep("requested");
@@ -1858,6 +1985,7 @@ export default function App() {
       await addReviewToProvider(selectedCustomerRequest.providerUid, reviewForm.rating);
     }
     await loadCustomerRequests(currentUser.uid);
+    await loadNotifications(currentUser.uid);
     setSelectedCustomerRequest((current) =>
       current
         ? {
@@ -1877,6 +2005,7 @@ export default function App() {
     if (!rescheduleForm.preferredDate || !rescheduleForm.preferredTime) return;
     await updateCustomerRequestSchedule(selectedCustomerRequest.id, rescheduleForm);
     await loadCustomerRequests(currentUser.uid);
+    await loadNotifications(currentUser.uid);
     const refreshed = await getLatestOngoingRequest(currentUser.uid);
     setSelectedCustomerRequest(refreshed || selectedCustomerRequest);
     setRescheduleVisible(false);
@@ -1890,6 +2019,7 @@ export default function App() {
     }
     await cancelCustomerRequest(selectedCustomerRequest.id);
     await loadCustomerRequests(currentUser.uid);
+    await loadNotifications(currentUser.uid);
     setCancelConfirmVisible(false);
     setSelectedCustomerRequest(null);
     navigateTo("ongoing", "back");
@@ -1905,6 +2035,38 @@ export default function App() {
       loadCustomerRequests(currentUser.uid);
     }
     navigateTo("history", "forward");
+  };
+
+  const openNotifications = async () => {
+    if (currentUser?.uid) {
+      const items = await loadNotifications(currentUser.uid);
+      const unreadIds = items.filter((item) => !item.read).map((item) => item.id);
+      if (unreadIds.length) {
+        await markNotificationsRead(unreadIds);
+        setNotifications((current) => current.map((item) => (unreadIds.includes(item.id) ? { ...item, read: true } : item)));
+      }
+    }
+    navigateTo("notifications", "forward");
+  };
+
+  const openNotificationRequest = async (notification) => {
+    if (!notification?.requestId || !currentUser?.uid) {
+      return;
+    }
+
+    const latestRequests = await getRequestsForCustomer(currentUser.uid);
+    setCustomerRequests(latestRequests);
+    const matchedRequest = latestRequests.find((item) => item.id === notification.requestId);
+
+    if (matchedRequest) {
+      setSelectedCustomerRequest(matchedRequest);
+      setSelectedServiceKey(matchedRequest.serviceKey || selectedServiceKey);
+      setSelectedProviderName(matchedRequest.providerName || "");
+      navigateTo(`status-${matchedRequest.serviceKey}`, "forward");
+      return;
+    }
+
+    navigateTo("notifications", "forward");
   };
 
   const openOngoing = () => {
@@ -1998,7 +2160,7 @@ export default function App() {
       allowsMultipleSelection: true,
       selectionLimit: 3,
       orderedSelection: true,
-      quality: 0.8,
+      quality: 0.25,
       base64: true
     });
 
@@ -2017,8 +2179,13 @@ export default function App() {
       setCompletionProofError("");
       const uploadedPhotos = [];
       for (const asset of completionProofPhotos.slice(0, 3)) {
-        const uploadedUrl = await uploadProofPhoto(selectedWorkerRequest.id, asset);
-        uploadedPhotos.push(uploadedUrl);
+        const inlinePhoto = await getInlineImageData(asset);
+        uploadedPhotos.push(inlinePhoto);
+      }
+
+      const totalInlineBytes = uploadedPhotos.reduce((sum, item) => sum + (item?.length || 0), 0);
+      if (totalInlineBytes > MAX_PROOF_INLINE_BYTES) {
+        throw new Error("Selected photos are still too large. Please choose fewer photos or screenshots with less detail.");
       }
 
       await updateProviderRequestStatus(
@@ -2104,6 +2271,7 @@ export default function App() {
       setSignInForm({ email: "", password: "" });
       if (profile.role !== "provider") {
         await loadCustomerRequests(user.uid);
+        await loadNotifications(user.uid);
       } else {
         await loadProviderRequests(profile.serviceTypes || [profile.serviceType || "plumbing"], user.uid, user.email || "");
       }
@@ -2144,6 +2312,7 @@ export default function App() {
       setSignUpForm({ email: "", password: "", confirmPassword: "" });
       if (profile.role !== "provider") {
         await loadCustomerRequests(user.uid);
+        await loadNotifications(user.uid);
       } else {
         await loadProviderRequests(profile.serviceTypes || [profile.serviceType || "plumbing"], user.uid, user.email || "");
       }
@@ -2165,6 +2334,12 @@ export default function App() {
       useNativeDriver: true
     }).start();
   }, [navDirection, pageTranslate, screen]);
+
+  useEffect(() => {
+    if (screen === "dashboard" && currentUser?.uid && currentUserProfile?.role !== "provider") {
+      loadNotifications(currentUser.uid);
+    }
+  }, [currentUser?.uid, currentUserProfile?.role, screen]);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -2190,6 +2365,7 @@ export default function App() {
             await loadProviderRequests(profile.serviceTypes || [profile.serviceType || "plumbing"], user.uid, user.email || "");
           } else {
             await loadCustomerRequests(user.uid);
+            await loadNotifications(user.uid);
           }
 
           setNamePromptVisible(false);
@@ -2205,6 +2381,7 @@ export default function App() {
           setCurrentUserProfile(null);
           setProviderRequests([]);
           setCustomerRequests([]);
+          setNotifications([]);
           setOngoingRequest(null);
           setSelectedWorkerRequest(null);
           setNamePromptVisible(false);
@@ -2258,11 +2435,11 @@ export default function App() {
         )}
         {screen === "dashboard" && (
           <DashboardScreen
-            mutedBell={mutedBell}
+            unreadCount={notifications.filter((item) => !item.read).length}
             showLocationModal={locationPromptVisible}
             onEnableLocation={() => setLocationPromptVisible(false)}
             onLater={() => setLocationPromptVisible(false)}
-            onToggleBell={() => setMutedBell((value) => !value)}
+            onOpenNotifications={openNotifications}
             onOpenService={openServiceForm}
             onOpenOffer={openOfferedServices}
             onOpenHistory={openHistory}
@@ -2279,6 +2456,14 @@ export default function App() {
               await signOutFromFirebase();
               navigateTo("signin", "back");
             }}
+          />
+        )}
+        {screen === "notifications" && (
+          <NotificationScreen
+            onBack={goBackToDashboard}
+            notifications={notifications}
+            loading={notificationsLoading}
+            onOpenRequest={openNotificationRequest}
           />
         )}
         {screen === "provider-dashboard" && (
@@ -2416,6 +2601,8 @@ export default function App() {
           onPickPhoto={pickProfilePhoto}
           onSave={saveProfile}
           onDeleteAccount={handleDeleteAccount}
+          photoUploadLoading={profilePhotoUploading}
+          uploadError={profilePhotoError}
         />
       )}
       <NamePromptModal visible={namePromptVisible} value={newAccountName} onChange={setNewAccountName} onSave={saveNewAccountName} />
@@ -2674,6 +2861,26 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "flex-end",
     gap: 18
+  },
+  headerBellButton: {
+    position: "relative"
+  },
+  headerBellBadge: {
+    position: "absolute",
+    top: -7,
+    right: -10,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "#f24444",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4
+  },
+  headerBellBadgeText: {
+    color: "#fff",
+    fontSize: 9,
+    fontWeight: "800"
   },
   guidePill: {
     marginTop: 110,
@@ -3367,6 +3574,48 @@ const styles = StyleSheet.create({
     marginTop: 10,
     marginBottom: 16
   },
+  proofViewerButton: {
+    alignSelf: "center",
+    minWidth: 150,
+    height: 30,
+    borderRadius: 6,
+    marginTop: 12
+  },
+  proofViewerModalCard: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 16,
+    width: "100%",
+    maxWidth: 360,
+    maxHeight: "85%"
+  },
+  proofViewerScroll: {
+    gap: 12,
+    paddingVertical: 10
+  },
+  proofViewerImage: {
+    width: "100%",
+    height: 240,
+    borderRadius: 10,
+    backgroundColor: "#eef3f8"
+  },
+  fullscreenProofBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.94)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 18
+  },
+  fullscreenProofClose: {
+    position: "absolute",
+    top: 52,
+    right: 18,
+    zIndex: 2
+  },
+  fullscreenProofImage: {
+    width: "100%",
+    height: "82%"
+  },
   proofImage: {
     width: "100%",
     height: 140,
@@ -3768,5 +4017,46 @@ const styles = StyleSheet.create({
     height: 160,
     borderRadius: 8,
     marginTop: 12
+  },
+  notificationCard: {
+    backgroundColor: "rgba(255,255,255,0.95)",
+    borderRadius: 10,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "#c7d4df",
+    marginBottom: 12
+  },
+  notificationCardUnread: {
+    borderColor: theme.blue,
+    backgroundColor: "#f2f8ff"
+  },
+  notificationTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 6
+  },
+  notificationTitle: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: "800",
+    color: theme.blueDark,
+    paddingRight: 8
+  },
+  notificationUnreadDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "#f24444"
+  },
+  notificationBody: {
+    fontSize: 12,
+    color: "#525252",
+    lineHeight: 18
+  },
+  notificationTime: {
+    marginTop: 10,
+    fontSize: 10,
+    color: "#7a7a7a"
   }
 });
