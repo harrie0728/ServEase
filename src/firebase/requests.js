@@ -36,6 +36,7 @@ export async function createServiceRequest({
     preferredTime: requestForm.time.trim(),
     location: requestForm.location.trim(),
     landmark: requestForm.landmark.trim(),
+    coordinates: requestForm.coordinates || null,
     concern: requestForm.concern.trim(),
     status: "requested",
     statusHistory: {

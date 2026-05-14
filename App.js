@@ -6,7 +6,6 @@ import {
   Image,
   Modal,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -15,13 +14,17 @@ import {
   View
 } from "react-native";
 import DateTimePicker from "@react-native-community/datetimepicker";
+import { WebView } from 'react-native-webview';
+import * as Location from 'expo-location';
 import { Ionicons, MaterialCommunityIcons, Feather } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import * as ImagePicker from "expo-image-picker";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { onAuthStateChanged } from "firebase/auth";
 import { signInWithFirebase, signOutFromFirebase, signUpWithFirebase } from "./src/firebase/auth";
-import { auth } from "./src/firebase/config";
-import { getRequestsForProvider, updateProviderRequestStatus } from "./src/firebase/providerRequests";
+import { auth, db } from "./src/firebase/config";
+import { doc, onSnapshot, collection, query, where } from "firebase/firestore";
+import { getRequestsForProvider, updateProviderRequestStatus, updateWorkerLocation } from "./src/firebase/providerRequests";
 import { getNotificationsForUser, markNotificationsRead } from "./src/firebase/notifications";
 import {
   cancelCustomerRequest,
@@ -194,6 +197,51 @@ const emptyRequestForm = {
   landmark: "",
   concern: ""
 };
+
+const customerGuideSections = [
+  {
+    title: "1. Explore Services",
+    items: [
+      "Use the offered services shortcuts to browse Plumbing, Electrical, CCTV Installation, and Solar Panel Installation.",
+      "Tap Create a Request when you are ready to book a worker for a specific problem."
+    ]
+  },
+  {
+    title: "2. Fill Out Your Request",
+    items: [
+      "Enter your name, contact number, preferred date and time, location, and a short description of the concern.",
+      "Required fields must be completed before you can continue to the provider list."
+    ]
+  },
+  {
+    title: "3. Choose a Service Provider",
+    items: [
+      "Review available workers near your area, open their profile, and check their skills, work ethics, and customer reviews.",
+      "Send your request once you are confident with the provider you selected."
+    ]
+  },
+  {
+    title: "4. Track Your Request",
+    items: [
+      "Open On-going Request to follow the current status of your booking from requested up to completed.",
+      "You can reschedule before the worker is already on the way or has started the job."
+    ]
+  },
+  {
+    title: "5. Review and Proof",
+    items: [
+      "Once the service is completed, you can view the submitted proof photos from the worker.",
+      "Leave a rating and review to help other customers choose the right provider."
+    ]
+  },
+  {
+    title: "Helpful Reminders",
+    items: [
+      "Keep your phone number and location accurate so the worker can reach you easily.",
+      "Check notifications regularly for request updates, reschedules, and completion notices."
+    ]
+  }
+];
 
 function splitProfileList(value, fallbackItems = []) {
   const items = (value || "")
@@ -443,7 +491,7 @@ function SignUpScreen({ onSignUp, onGoSignIn, values, onChangeText, errorMessage
   );
 }
 
-function HeaderArea({ unreadCount = 0, onMenuPress, onBellPress }) {
+function HeaderArea({ unreadCount = 0, onMenuPress, onBellPress, onGuidePress }) {
   return (
     <LinearGradient colors={["#134f80", "#2c85c6", "#87bee9"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.headerArea}>
       <Image source={{ uri: featuredImages.hero }} style={styles.heroImage} />
@@ -461,10 +509,10 @@ function HeaderArea({ unreadCount = 0, onMenuPress, onBellPress }) {
           <Feather name="menu" size={24} color="#fff" />
         </Pressable>
       </View>
-      <View style={styles.guidePill}>
+      <Pressable onPress={onGuidePress} style={styles.guidePill}>
         <Ionicons name="book-outline" size={18} color="#0ea7a0" />
         <Text style={styles.guideText}>Manual/Guide</Text>
-      </View>
+      </Pressable>
     </LinearGradient>
   );
 }
@@ -526,6 +574,7 @@ function DashboardScreen({
   onOpenOffer,
   onOpenHistory,
   onOpenOngoing,
+  onOpenGuide,
   onMenuPress,
   onCloseMenu,
   onOpenProfile,
@@ -544,7 +593,7 @@ function DashboardScreen({
 
   return (
     <View style={styles.dashboardScreen}>
-      <HeaderArea unreadCount={unreadCount} onBellPress={onOpenNotifications} onMenuPress={onMenuPress} />
+      <HeaderArea unreadCount={unreadCount} onBellPress={onOpenNotifications} onMenuPress={onMenuPress} onGuidePress={onOpenGuide} />
       <ScrollView contentContainerStyle={styles.dashboardContent}>
         <FeaturedCarousel />
         <Text style={styles.sectionTitle}>Offered Services</Text>
@@ -587,7 +636,7 @@ function DashboardScreen({
   );
 }
 
-function ServiceFormScreen({ service, onBack, onSubmit, values, onChangeText, errorMessage, onOpenDate, onOpenTime }) {
+function ServiceFormScreen({ service, onBack, onSubmit, values, onChangeText, errorMessage, onOpenDate, onOpenTime, onOpenMap }) {
   const requiredFields = new Set(["name", "number", "date", "time", "location", "concern"]);
   return (
     <View style={styles.serviceScreen}>
@@ -620,12 +669,21 @@ function ServiceFormScreen({ service, onBack, onSubmit, values, onChangeText, er
                   value={values[field.key]}
                   onChangeText={(text) => onChangeText(field.key, text)}
                 />
-                {field.icon ? (
+                {field.key === "location" ? (
+                  <Pressable onPress={onOpenMap} style={styles.pinButton}>
+                    <Text style={styles.pinButtonText}>PIN MAP</Text>
+                  </Pressable>
+                ) : field.icon ? (
                   <Pressable onPress={field.key === "date" ? onOpenDate : field.key === "time" ? onOpenTime : undefined}>
                     <Ionicons name={field.icon} size={20} color="#7d7d7d" />
                   </Pressable>
                 ) : null}
               </View>
+              {field.key === "location" && values.coordinates ? (
+                <Text style={{ fontSize: 10, color: '#2d8fdb', marginTop: 4, fontWeight: '700' }}>
+                  📍 Pinned Coordinates Saved
+                </Text>
+              ) : null}
             </View>
           ))}
 
@@ -996,6 +1054,41 @@ function RequestStatusScreen({
       (step.key === activeStep ? request?.updatedAt : null)
   }));
 
+  // --- NEW LIVE TRACKING LOGIC ---
+  const [liveLocation, setLiveLocation] = useState(request?.workerLocation || null);
+  const webViewRef = useRef(null);
+
+  useEffect(() => {
+    if (activeStep === "on-the-way" && request?.id) {
+      // Create a live connection to this specific request in Firebase
+      const requestRef = doc(db, "requests", request.id);
+      const unsubscribe = onSnapshot(requestRef, (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data.workerLocation) {
+            setLiveLocation(data.workerLocation);
+            
+            // Tell the map to move the pin smoothly without reloading the page
+            if (webViewRef.current) {
+              webViewRef.current.injectJavaScript(`
+                if (typeof marker !== 'undefined' && marker) {
+                  var newLatLng = new L.LatLng(${data.workerLocation.latitude}, ${data.workerLocation.longitude});
+                  marker.setLatLng(newLatLng);
+                  map.panTo(newLatLng);
+                }
+                true;
+              `);
+            }
+          }
+        }
+      });
+
+      // Turn off the live connection if they leave the screen
+      return () => unsubscribe();
+    }
+  }, [activeStep, request?.id]);
+  // --- END LIVE TRACKING LOGIC ---
+
   return (
     <View style={styles.serviceScreen}>
       <Image source={{ uri: featuredImages.formBg }} style={styles.serviceBgImage} />
@@ -1011,6 +1104,34 @@ function RequestStatusScreen({
           </View>
           <Text style={styles.statusName}>{displayProviderName}</Text>
           <StarRating />
+
+          {activeStep === "on-the-way" && liveLocation ? (
+            <View style={{ height: 200, width: '100%', borderRadius: 10, overflow: 'hidden', marginTop: 10 }}>
+              <WebView 
+                ref={webViewRef}
+                source={{ html: `
+                  <!DOCTYPE html>
+                  <html>
+                  <head>
+                      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+                      <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+                      <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+                      <style> body { padding: 0; margin: 0; } #map { height: 100vh; width: 100vw; } </style>
+                  </head>
+                  <body>
+                      <div id="map"></div>
+                      <script>
+                          var map = L.map('map').setView([${liveLocation.latitude}, ${liveLocation.longitude}], 16);
+                          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+                          var marker = L.marker([${liveLocation.latitude}, ${liveLocation.longitude}]).addTo(map).bindPopup("Your Worker is here!").openPopup();
+                      </script>
+                  </body>
+                  </html>
+                `}}
+              />
+            </View>
+          ) : null}
+
           {activeStep !== "proof" ? (
             <>
               <View style={styles.statusActionRow}>
@@ -1382,6 +1503,36 @@ function NotificationScreen({ onBack, notifications, loading, onOpenRequest }) {
   );
 }
 
+function CustomerGuideScreen({ onBack }) {
+  return (
+    <View style={styles.serviceScreen}>
+      <Image source={{ uri: featuredImages.hero }} style={styles.serviceBgImage} />
+      <View style={styles.serviceBgOverlay} />
+      <ScrollView contentContainerStyle={styles.serviceScroll}>
+        <Pressable onPress={onBack} style={styles.formBackIcon}>
+          <Ionicons name="arrow-back-circle-outline" size={28} color="#1f1f1f" />
+        </Pressable>
+        <View style={styles.workerPanel}>
+          <Text style={styles.workerPanelTitle}>Customer Manual</Text>
+          <Text style={styles.workerPanelText}>
+            Welcome to ServEase. This quick guide shows how to request a service, follow its progress, and complete your review after the job is finished.
+          </Text>
+        </View>
+        {customerGuideSections.map((section) => (
+          <View key={section.title} style={styles.guideCard}>
+            <Text style={styles.guideCardTitle}>{section.title}</Text>
+            {section.items.map((item) => (
+              <Text key={item} style={styles.guideCardItem}>
+                - {item}
+              </Text>
+            ))}
+          </View>
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
 function ProviderDashboardScreen({ profile, requests, loading, onOpenRequests, onOpenHistory, onOpenProfile, onSignOut }) {
   const historyCount = requests.filter((item) => ["completed", "cancelled"].includes(item.status)).length;
   const activeCount = requests.filter((item) => !["completed", "cancelled"].includes(item.status)).length;
@@ -1505,6 +1656,46 @@ function ProviderRequestDetailScreen({ request, onBack, onUpdateStatus, onCancel
     completed: "Completed"
   };
 
+  // --- NEW LOCATION TRACKING LOGIC ---
+  useEffect(() => {
+    let locationSubscription = null;
+
+    const startTracking = async () => {
+      // Only track if the status is exactly "on-the-way"
+      if (request.status === "on-the-way") {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          console.error("Permission to access location was denied");
+          return;
+        }
+
+        // Start watching the position
+        locationSubscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.High,
+            timeInterval: 5000, // Update every 5 seconds
+            distanceInterval: 10, // Or update every 10 meters
+          },
+          (location) => {
+            // Send the coordinates to Firebase
+            updateWorkerLocation(request.id, location.coords.latitude, location.coords.longitude)
+              .catch(err => console.error("Error updating location:", err));
+          }
+        );
+      }
+    };
+
+    startTracking();
+
+    // Clean up the watcher when the component unmounts or status changes
+    return () => {
+      if (locationSubscription) {
+        locationSubscription.remove();
+      }
+    };
+  }, [request.status, request.id]);
+  // --- END NEW LOCATION TRACKING LOGIC ---
+
   return (
     <View style={styles.serviceScreen}>
       <Image source={{ uri: featuredImages.formBg }} style={styles.serviceBgImage} />
@@ -1527,6 +1718,31 @@ function ProviderRequestDetailScreen({ request, onBack, onUpdateStatus, onCancel
           <Text style={styles.workerDetailValue}>{`${request.preferredDate || "-"} ${request.preferredTime || ""}`}</Text>
           <Text style={styles.workerDetailLabel}>Concern</Text>
           <Text style={styles.workerDetailValue}>{request.concern || "-"}</Text>
+          {request.coordinates ? (
+            <View style={{ height: 180, width: '100%', borderRadius: 8, overflow: 'hidden', marginTop: 8, marginBottom: 8, borderWidth: 1, borderColor: '#9aa6b1' }}>
+              <WebView 
+                source={{ html: `
+                  <!DOCTYPE html>
+                  <html>
+                  <head>
+                      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+                      <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+                      <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+                      <style> body { padding: 0; margin: 0; } #map { height: 100vh; width: 100vw; } </style>
+                  </head>
+                  <body>
+                      <div id="map"></div>
+                      <script>
+                          var map = L.map('map').setView([${request.coordinates.latitude}, ${request.coordinates.longitude}], 16);
+                          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+                          L.marker([${request.coordinates.latitude}, ${request.coordinates.longitude}]).addTo(map).bindPopup("Customer's Pinned Location").openPopup();
+                      </script>
+                  </body>
+                  </html>
+                `}}
+              />
+            </View>
+          ) : null}
           <PrimaryButton
             title={nextActionMap[request.status] || "Update"}
             onPress={onUpdateStatus}
@@ -1574,6 +1790,8 @@ export default function App() {
   const [requestError, setRequestError] = useState("");
   const [datePickerField, setDatePickerField] = useState(null);
   const [timePickerVisible, setTimePickerVisible] = useState(false);
+  const [mapPickerVisible, setMapPickerVisible] = useState(false);
+  const [tempCoordinates, setTempCoordinates] = useState(null);
   const [rescheduleVisible, setRescheduleVisible] = useState(false);
   const [cancelConfirmVisible, setCancelConfirmVisible] = useState(false);
   const [rescheduleForm, setRescheduleForm] = useState({ preferredDate: "", preferredTime: "" });
@@ -1896,7 +2114,7 @@ export default function App() {
         provider: providerToUse,
         requestForm
       });
-      const optimisticRequest = {
+const optimisticRequest = {
         id: requestId,
         userId: currentUser.uid,
         userEmail: currentUser.email || "",
@@ -1911,6 +2129,7 @@ export default function App() {
         preferredTime: requestForm.time.trim(),
         location: requestForm.location.trim(),
         landmark: requestForm.landmark.trim(),
+        coordinates: requestForm.coordinates || null,
         concern: requestForm.concern.trim(),
         status: "requested",
         statusHistory: {},
@@ -2341,54 +2560,59 @@ export default function App() {
     }
   }, [currentUser?.uid, currentUserProfile?.role, screen]);
 
-  useEffect(() => {
+useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       const hydrateUser = async () => {
-        setCurrentUser(user);
+        try {
+          setCurrentUser(user);
 
-        if (user) {
-          const profile = await ensureUserProfile(user);
-          setCurrentUserProfile(profile);
-          setProfileForm({
-            displayName: profile.displayName || "",
-            bio: profile.bio || "",
-            skills: profile.skills || "",
-            strengths: profile.strengths || "",
-            photoURL: profile.photoURL || ""
-          });
+          if (user) {
+            const profile = await ensureUserProfile(user);
+            setCurrentUserProfile(profile);
+            setProfileForm({
+              displayName: profile.displayName || "",
+              bio: profile.bio || "",
+              skills: profile.skills || "",
+              strengths: profile.strengths || "",
+              photoURL: profile.photoURL || ""
+            });
 
-          if (
-            user.uid === SPECIAL_WORKER_UID ||
-            user.email === SPECIAL_WORKER_EMAIL ||
-            profile.role === "provider"
-          ) {
-            await loadProviderRequests(profile.serviceTypes || [profile.serviceType || "plumbing"], user.uid, user.email || "");
-          } else {
-            await loadCustomerRequests(user.uid);
-            await loadNotifications(user.uid);
-          }
-
-          setNamePromptVisible(false);
-
-          setScreen((current) => {
-            if (current === "start" || current === "signin" || current === "signup") {
-              return profile.role === "provider" ? "provider-dashboard" : "dashboard";
+            if (
+              user.uid === SPECIAL_WORKER_UID ||
+              user.email === SPECIAL_WORKER_EMAIL ||
+              profile.role === "provider"
+            ) {
+              await loadProviderRequests(profile.serviceTypes || [profile.serviceType || "plumbing"], user.uid, user.email || "");
+            } else {
+              await loadCustomerRequests(user.uid);
+              await loadNotifications(user.uid);
             }
 
-            return current;
-          });
-        } else {
-          setCurrentUserProfile(null);
-          setProviderRequests([]);
-          setCustomerRequests([]);
-          setNotifications([]);
-          setOngoingRequest(null);
-          setSelectedWorkerRequest(null);
-          setNamePromptVisible(false);
-          setScreen((current) => (current !== "start" && current !== "signin" && current !== "signup" ? "signin" : current));
-        }
+            setNamePromptVisible(false);
 
-        setAuthReady(true);
+            setScreen((current) => {
+              if (current === "start" || current === "signin" || current === "signup") {
+                return profile.role === "provider" ? "provider-dashboard" : "dashboard";
+              }
+
+              return current;
+            });
+          } else {
+            setCurrentUserProfile(null);
+            setProviderRequests([]);
+            setCustomerRequests([]);
+            setNotifications([]);
+            setOngoingRequest(null);
+            setSelectedWorkerRequest(null);
+            setNamePromptVisible(false);
+            setScreen((current) => (current !== "start" && current !== "signin" && current !== "signup" ? "signin" : current));
+          }
+        } catch (error) {
+          console.error("Error during initial data hydration:", error);
+          await signOutFromFirebase(); 
+        } finally {
+          setAuthReady(true);
+        }
       };
 
       hydrateUser();
@@ -2396,21 +2620,56 @@ export default function App() {
 
     return unsubscribe;
   }, []);
+// --- NEW REAL-TIME STATUS LISTENER FOR CUSTOMERS ---
+  useEffect(() => {
+    let unsubscribe = () => {};
+    
+    // Only turn on the antenna if a Customer is logged in
+    if (currentUser?.uid && currentUserProfile?.role !== "provider") {
+      const q = query(collection(db, "requests"), where("userId", "==", currentUser.uid));
+      
+      unsubscribe = onSnapshot(q, (snapshot) => {
+        const allRequests = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        
+        // Sort requests so the newest ones are at the top
+        allRequests.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+        
+        setCustomerRequests(allRequests);
+        
+        // Auto-update the "Ongoing Request" widget on the dashboard
+        const activeStatuses = ["requested", "accepted", "on-the-way", "started"];
+        const ongoing = allRequests.find(item => activeStatuses.includes(item.status)) || null;
+        setOngoingRequest(ongoing);
 
+        // Auto-update the Status Screen if the user is currently staring at it
+        setSelectedCustomerRequest(currentSelected => {
+          if (!currentSelected) return currentSelected;
+          return allRequests.find(r => r.id === currentSelected.id) || currentSelected;
+        });
+      });
+    }
+    
+    // Turn off the antenna if they log out
+    return () => unsubscribe();
+  }, [currentUser?.uid, currentUserProfile?.role]);
+  // --- END NEW REAL-TIME STATUS LISTENER ---
   if (!authReady) {
     return (
-      <SafeAreaView style={styles.safeArea}>
-        <StatusBar barStyle="dark-content" backgroundColor={theme.bg} />
+      <SafeAreaProvider>
+        <SafeAreaView style={styles.safeArea} edges={["top", "bottom"]}>
+        <StatusBar barStyle="dark-content" backgroundColor={theme.bg} translucent={false} />
         <View style={styles.loadingScreen}>
           <Text style={styles.loadingText}>Loading ServEase...</Text>
         </View>
-      </SafeAreaView>
+        </SafeAreaView>
+      </SafeAreaProvider>
     );
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" backgroundColor={theme.bg} />
+    <SafeAreaProvider>
+    <SafeAreaView style={styles.safeArea} edges={["top", "bottom"]}>
+      <StatusBar barStyle="dark-content" backgroundColor={theme.bg} translucent={false} />
       <Animated.View style={[styles.pageTransitionWrap, { transform: [{ translateX: pageTranslate }] }]}>
         {screen === "start" && <StartScreen onNext={() => navigateTo("signin", "forward")} />}
         {screen === "signin" && (
@@ -2444,6 +2703,7 @@ export default function App() {
             onOpenOffer={openOfferedServices}
             onOpenHistory={openHistory}
             onOpenOngoing={openOngoing}
+            onOpenGuide={() => navigateTo("customer-guide", "forward")}
             onMenuPress={() => setMenuVisible(true)}
             onCloseMenu={() => setMenuVisible(false)}
             onOpenProfile={() => {
@@ -2466,6 +2726,7 @@ export default function App() {
             onOpenRequest={openNotificationRequest}
           />
         )}
+        {screen === "customer-guide" && <CustomerGuideScreen onBack={goBackToDashboard} />}
         {screen === "provider-dashboard" && (
           <ProviderDashboardScreen
             profile={currentUserProfile}
@@ -2517,6 +2778,11 @@ export default function App() {
             onOpenTime={() => {
               setDatePickerField("request-time");
               setTimePickerVisible(true);
+            }}
+            onOpenMap={() => {
+              // Default view slightly around Batangas region
+              setTempCoordinates(requestForm.coordinates || { latitude: 13.8443, longitude: 121.2140 }); 
+              setMapPickerVisible(true);
             }}
           />
         )}
@@ -2659,8 +2925,99 @@ export default function App() {
         onSubmit={submitCompletionProof}
         isSubmitting={completionSubmitting}
       />
+
+      <Modal transparent visible={mapPickerVisible} animationType="slide">
+        <View style={{ flex: 1, backgroundColor: '#fff' }}>
+          <View style={{ paddingTop: 50, paddingBottom: 16, paddingHorizontal: 20, backgroundColor: theme.blue, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Text style={{ color: '#fff', fontSize: 18, fontWeight: '700' }}>Pin Your Location</Text>
+            <Pressable onPress={() => setMapPickerVisible(false)}>
+              <Ionicons name="close-circle" size={28} color="#fff" />
+            </Pressable>
+          </View>
+          
+          <View style={{ padding: 12, alignItems: 'center', backgroundColor: '#f8f9fa' }}>
+            <Text style={{ fontSize: 12, color: '#555', textAlign: 'center', marginBottom: 8 }}>Tap anywhere on the map to place your pin.</Text>
+            <Pressable 
+              style={{ backgroundColor: '#2d8fdb', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, flexDirection: 'row', alignItems: 'center', gap: 6 }}
+              onPress={async () => {
+                try {
+                  const { status } = await Location.requestForegroundPermissionsAsync();
+                  if (status !== 'granted') {
+                    alert('Permission to access location was denied');
+                    return;
+                  }
+                  const location = await Location.getCurrentPositionAsync({});
+                  setTempCoordinates({ latitude: location.coords.latitude, longitude: location.coords.longitude });
+                } catch (error) {
+                  alert('Could not fetch location. Please ensure GPS is turned on.');
+                }
+              }}
+            >
+              <Ionicons name="locate" size={16} color="#fff" />
+              <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>Auto-Detect My Location</Text>
+            </Pressable>
+          </View>
+
+          <View style={{ flex: 1 }}>
+            {mapPickerVisible ? (
+              <WebView 
+                key={tempCoordinates ? `${tempCoordinates.latitude}-${tempCoordinates.longitude}` : 'map'}
+                source={{ html: `
+                  <!DOCTYPE html>
+                  <html>
+                  <head>
+                      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+                      <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+                      <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+                      <style> body { padding: 0; margin: 0; } #map { height: 100vh; width: 100vw; } </style>
+                  </head>
+                  <body>
+                      <div id="map"></div>
+                      <script>
+                          var initialLat = ${tempCoordinates?.latitude || 13.8443};
+                          var initialLng = ${tempCoordinates?.longitude || 121.2140};
+                          var map = L.map('map').setView([initialLat, initialLng], 16);
+                          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+                          
+                          var marker = L.marker([initialLat, initialLng]).addTo(map);
+                          
+                          map.on('click', function(e) {
+                              if(marker) map.removeLayer(marker);
+                              marker = L.marker(e.latlng).addTo(map);
+                              window.ReactNativeWebView.postMessage(JSON.stringify({ latitude: e.latlng.lat, longitude: e.latlng.lng }));
+                          });
+                      </script>
+                  </body>
+                  </html>
+                `}}
+                onMessage={(event) => {
+                  try {
+                    const coords = JSON.parse(event.nativeEvent.data);
+                    // Update state without causing a full reload of the map
+                    setTempCoordinates(coords);
+                  } catch (e) {}
+                }}
+              />
+            ) : null}
+          </View>
+
+          <View style={{ padding: 20, paddingBottom: 40, backgroundColor: '#fff' }}>
+            <PrimaryButton 
+              title={tempCoordinates ? "Save Pinned Location" : "Tap the map first"} 
+              onPress={() => {
+                updateRequestForm("coordinates", tempCoordinates);
+                setMapPickerVisible(false);
+              }} 
+              disabled={!tempCoordinates}
+              style={{ width: '100%', height: 46, borderRadius: 10 }}
+            />
+          </View>
+        </View>
+      </Modal>
+        
       </Animated.View>
     </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 
@@ -3953,6 +4310,26 @@ const styles = StyleSheet.create({
     color: "#575757",
     lineHeight: 18,
     marginBottom: 12
+  },
+  guideCard: {
+    backgroundColor: "rgba(255,255,255,0.95)",
+    borderRadius: 10,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#9aa6b1",
+    marginBottom: 14
+  },
+  guideCardTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: theme.blueDark,
+    marginBottom: 10
+  },
+  guideCardItem: {
+    fontSize: 12,
+    color: "#4f4f4f",
+    lineHeight: 20,
+    marginBottom: 8
   },
   workerActionButton: {
     width: "100%",

@@ -1,0 +1,13 @@
+node_modules/
+.expo/
+.git/
+.gradle-local/
+android/.gradle-home/
+android/.gradle-home-2/
+android/.gradle/
+android/app/build/
+android/build/
+build-debug.log
+npm-debug.*
+yarn-debug.*
+yarn-error.*

@@ -65,3 +65,17 @@ export async function updateProviderRequestStatus(requestId, status, providerInf
     });
   }
 }
+// ... existing updateProviderRequestStatus code ...
+//   }
+// }
+
+export async function updateWorkerLocation(requestId, latitude, longitude) {
+  const requestRef = doc(db, "requests", requestId);
+  await updateDoc(requestRef, {
+    workerLocation: {
+      latitude,
+      longitude,
+      timestamp: serverTimestamp()
+    }
+  });
+}

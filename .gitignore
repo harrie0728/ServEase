@@ -5,3 +5,6 @@ dist
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+.gradle-local/
+.npm-cache/
+releases/

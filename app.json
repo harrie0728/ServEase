@@ -22,7 +22,13 @@
       }
     },
     "plugins": [
-      "expo-font"
+      "expo-font",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow ServEase to use your location so customers can track your arrival."
+        }
+      ]
     ],
     "extra": {
       "eas": {
