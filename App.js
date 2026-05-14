@@ -19,7 +19,7 @@ import {
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { WebView } from 'react-native-webview';
 import * as Location from 'expo-location';
-import { Ionicons, MaterialCommunityIcons, Feather } from "@expo/vector-icons";
+import { Ionicons, Feather } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import * as ImagePicker from "expo-image-picker";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
@@ -49,6 +49,8 @@ import {
   addReviewToProvider
 } from "./src/firebase/users";
 import { getInlineImageData, getInlineProfileImageData } from "./src/firebase/storage";
+
+const serveaseLogo = require("./ServEase Logo.png");
 
 const theme = {
   blue: "#1677b8",
@@ -309,74 +311,7 @@ function normalizeFirebaseError(error) {
 }
 
 function LogoMark({ size = 128 }) {
-  const tile = size / 2.35;
-  const radius = tile * 0.24;
-  const iconSize = tile * 0.55;
-
-  return (
-    <View style={[styles.logoGrid, { width: size, height: size }]}>
-      <View
-        style={[
-          styles.logoTile,
-          {
-            width: tile,
-            height: tile,
-            borderRadius: radius,
-            backgroundColor: theme.blue,
-            top: 0,
-            left: size * 0.25
-          }
-        ]}
-      >
-        <MaterialCommunityIcons name="lightning-bolt-circle" size={iconSize} color="#fff" />
-      </View>
-      <View
-        style={[
-          styles.logoTile,
-          {
-            width: tile,
-            height: tile,
-            borderRadius: radius,
-            backgroundColor: theme.yellow,
-            top: size * 0.25,
-            left: 0
-          }
-        ]}
-      >
-        <MaterialCommunityIcons name="cctv" size={iconSize} color="#fff" />
-      </View>
-      <View
-        style={[
-          styles.logoTile,
-          {
-            width: tile,
-            height: tile,
-            borderRadius: radius,
-            backgroundColor: theme.yellow,
-            top: size * 0.25,
-            right: 0
-          }
-        ]}
-      >
-        <MaterialCommunityIcons name="water-outline" size={iconSize} color="#fff" />
-      </View>
-      <View
-        style={[
-          styles.logoTile,
-          {
-            width: tile,
-            height: tile,
-            borderRadius: radius,
-            backgroundColor: theme.blue,
-            bottom: 0,
-            left: size * 0.25
-          }
-        ]}
-      >
-        <MaterialCommunityIcons name="solar-power" size={iconSize} color="#fff" />
-      </View>
-    </View>
-  );
+  return <Image source={serveaseLogo} style={{ width: size, height: size }} resizeMode="contain" />;
 }
 
 function BrandBlock({ compact = false }) {
@@ -638,6 +573,7 @@ function DashboardScreen({
   onMenuPress,
   onCloseMenu,
   onOpenProfile,
+  onOpenAbout,
   onSignOut
 }) {
   const menuSlide = useRef(new Animated.Value(220)).current;
@@ -692,9 +628,9 @@ function DashboardScreen({
             <Pressable onPress={onOpenProfile}>
               <Text style={styles.menuItem}>My profile</Text>
             </Pressable>
-            <Text style={styles.menuItem}>About us</Text>
-            <Text style={styles.menuItem}>Rate us</Text>
-            <Text style={styles.menuItem}>Help center</Text>
+            <Pressable onPress={onOpenAbout}>
+              <Text style={styles.menuItem}>About us</Text>
+            </Pressable>
             <Pressable onPress={onSignOut}>
               <Text style={styles.menuItem}>Sign out</Text>
             </Pressable>
@@ -928,7 +864,7 @@ function RequestSentModal({ provider, onProceed }) {
   );
 }
 
-function ProofPhotoGallery({ photos = [], imageStyle, emptyText }) {
+function ProofPhotoGallery({ photos = [], imageStyle, emptyText, onRemovePhoto }) {
   if (!photos.length) {
     return emptyText ? <Text style={styles.providerEmptyText}>{emptyText}</Text> : null;
   }
@@ -936,7 +872,14 @@ function ProofPhotoGallery({ photos = [], imageStyle, emptyText }) {
   return (
     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.proofGalleryRow}>
       {photos.map((photo, index) => (
-        <Image key={`${typeof photo === "string" ? photo : photo?.uri}-${index}`} source={{ uri: typeof photo === "string" ? photo : photo?.uri }} style={imageStyle || styles.proofGalleryImage} />
+        <View key={`${typeof photo === "string" ? photo : photo?.uri}-${index}`} style={styles.proofThumbWrap}>
+          <Image source={{ uri: typeof photo === "string" ? photo : photo?.uri }} style={imageStyle || styles.proofGalleryImage} />
+          {onRemovePhoto ? (
+            <Pressable onPress={() => onRemovePhoto(index)} style={styles.proofRemoveButton}>
+              <Ionicons name="close" size={16} color="#fff" />
+            </Pressable>
+          ) : null}
+        </View>
       ))}
     </ScrollView>
   );
@@ -959,7 +902,7 @@ function ProofPhotoViewerButton({
     <>
       <PrimaryButton title={buttonLabel} onPress={() => setVisible(true)} style={styles.proofViewerButton} textStyle={styles.historyEntryButtonText} />
       <Modal transparent visible={visible} animationType="fade">
-        <View style={styles.profileModalBackdrop}>
+        <View style={[styles.profileModalBackdrop, styles.centeredModalBackdrop]}>
           <AnimatedPopup style={styles.proofViewerModalCard}>
             <Text style={styles.reviewFormTitle}>{title}</Text>
             <ScrollView contentContainerStyle={styles.proofViewerScroll}>
@@ -992,14 +935,14 @@ function ProofPhotoViewerButton({
   );
 }
 
-function CompletionProofModal({ visible, photos, errorMessage, onPickPhotos, onClose, onSubmit, isSubmitting }) {
+function CompletionProofModal({ visible, photos, errorMessage, onPickPhotos, onRemovePhoto, onClose, onSubmit, isSubmitting }) {
   return (
     <Modal transparent visible={visible} animationType="fade">
       <View style={styles.profileModalBackdrop}>
         <AnimatedPopup style={styles.completionModalCard}>
           <Text style={styles.reviewFormTitle}>Proof of Service</Text>
           <Text style={styles.reviewPostedText}>Upload up to 3 finished-work photos before marking this request as completed.</Text>
-          <ProofPhotoGallery photos={photos} imageStyle={styles.completionPreviewImage} emptyText="No proof photos selected yet." />
+          <ProofPhotoGallery photos={photos} imageStyle={styles.completionPreviewImage} emptyText="No proof photos selected yet." onRemovePhoto={onRemovePhoto} />
           {errorMessage ? <Text style={styles.completionErrorText}>{errorMessage}</Text> : null}
           <View style={styles.equalButtonColumn}>
             <PrimaryButton title="Pick Photos" onPress={onPickPhotos} style={styles.equalActionButton} textStyle={styles.historyEntryButtonText} />
@@ -1606,6 +1549,45 @@ function CustomerGuideScreen({ onBack }) {
   );
 }
 
+const aboutTeamMembers = [
+  { name: "Kim Harrie Abel", role: "Lead Full Stack Developer / System Architect" },
+  { name: "Tricia Mae Bunyi", role: "Frontend Developer / Mobile UI Engineer" },
+  { name: "Princess De Belen", role: "Backend Developer / Firebase Integration Engineer" },
+  { name: "Janna Veronica De Torres", role: "QA Developer / Feature Testing Engineer" },
+  { name: "Kimberly Helera", role: "Mobile Developer / Documentation Engineer" }
+];
+
+function AboutUsScreen({ onBack }) {
+  return (
+    <View style={styles.serviceScreen}>
+      <View style={styles.serviceBgOverlay} />
+      <ScrollView contentContainerStyle={styles.serviceScroll}>
+        <Pressable onPress={onBack} style={styles.formBackIcon}>
+          <Ionicons name="arrow-back-circle-outline" size={28} color="#1f1f1f" />
+        </Pressable>
+        <View style={styles.workerPanel}>
+          <Text style={styles.workerPanelTitle}>About ServEase</Text>
+          <Text style={styles.workerPanelText}>
+            ServEase is a mobile service-request application designed to connect customers with trusted home service workers for plumbing, electrical, CCTV installation, and solar panel installation needs.
+          </Text>
+          <Text style={styles.workerPanelText}>
+            This application is the final project for the course Technopreneurship. It was built to demonstrate a practical technology-based service business concept with real-time booking, worker updates, messaging, proof of service, reviews, and location support.
+          </Text>
+        </View>
+        <View style={styles.workerPanel}>
+          <Text style={styles.workerPanelTitle}>Development Team</Text>
+          {aboutTeamMembers.map((member) => (
+            <View key={member.name} style={styles.aboutMemberCard}>
+              <Text style={styles.aboutMemberName}>{member.name}</Text>
+              <Text style={styles.aboutMemberRole}>{member.role}</Text>
+            </View>
+          ))}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
 function ChatInboxScreen({ requests, threadSummaries, currentUser, isProvider, onBack, onOpenChat }) {
   const chatRequests = requests
     .filter(isChatEnabledForRequest)
@@ -1924,6 +1906,7 @@ function ProviderHistoryScreen({ requests, loading, onBack, onOpenRequest }) {
 }
 
 function ProviderRequestDetailScreen({ request, onBack, onUpdateStatus, onCancelRequest, onOpenChat }) {
+  const [workerMapLocation, setWorkerMapLocation] = useState(request.workerLocation || null);
   const nextActionMap = {
     requested: "Accept Request",
     accepted: "Mark On The Way",
@@ -1932,30 +1915,39 @@ function ProviderRequestDetailScreen({ request, onBack, onUpdateStatus, onCancel
     completed: "Completed"
   };
 
-  // --- NEW LOCATION TRACKING LOGIC ---
+  useEffect(() => {
+    if (request.workerLocation) {
+      setWorkerMapLocation(request.workerLocation);
+    }
+  }, [request.workerLocation?.latitude, request.workerLocation?.longitude]);
+
   useEffect(() => {
     let locationSubscription = null;
 
     const startTracking = async () => {
-      // Only track if the status is exactly "on-the-way"
-      if (request.status === "on-the-way") {
+      if (request.coordinates) {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') {
           console.error("Permission to access location was denied");
           return;
         }
 
-        // Start watching the position
         locationSubscription = await Location.watchPositionAsync(
           {
             accuracy: Location.Accuracy.High,
-            timeInterval: 5000, // Update every 5 seconds
-            distanceInterval: 10, // Or update every 10 meters
+            timeInterval: 5000,
+            distanceInterval: 10,
           },
           (location) => {
-            // Send the coordinates to Firebase
-            updateWorkerLocation(request.id, location.coords.latitude, location.coords.longitude)
-              .catch(err => console.error("Error updating location:", err));
+            const nextLocation = {
+              latitude: location.coords.latitude,
+              longitude: location.coords.longitude
+            };
+            setWorkerMapLocation(nextLocation);
+            if (request.status === "on-the-way") {
+              updateWorkerLocation(request.id, nextLocation.latitude, nextLocation.longitude)
+                .catch(err => console.error("Error updating location:", err));
+            }
           }
         );
       }
@@ -1969,8 +1961,7 @@ function ProviderRequestDetailScreen({ request, onBack, onUpdateStatus, onCancel
         locationSubscription.remove();
       }
     };
-  }, [request.status, request.id]);
-  // --- END NEW LOCATION TRACKING LOGIC ---
+  }, [request.status, request.id, request.coordinates?.latitude, request.coordinates?.longitude]);
 
   return (
     <View style={styles.serviceScreen}>
@@ -2004,14 +1995,61 @@ function ProviderRequestDetailScreen({ request, onBack, onUpdateStatus, onCancel
                       <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
                       <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
                       <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-                      <style> body { padding: 0; margin: 0; } #map { height: 100vh; width: 100vw; } </style>
+                      <style>
+                        body { padding: 0; margin: 0; font-family: Arial, sans-serif; }
+                        #map { height: 100vh; width: 100vw; }
+                        .route-note {
+                          position: absolute;
+                          left: 10px;
+                          right: 10px;
+                          bottom: 10px;
+                          z-index: 500;
+                          background: rgba(255,255,255,0.94);
+                          border-radius: 10px;
+                          padding: 8px 10px;
+                          font-size: 12px;
+                          color: #17212b;
+                          box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+                        }
+                      </style>
                   </head>
                   <body>
                       <div id="map"></div>
+                      <div class="route-note" id="routeNote">${workerMapLocation ? "Route guidance from your current location to the customer pin." : "Waiting for your current location to draw route guidance."}</div>
                       <script>
-                          var map = L.map('map').setView([${request.coordinates.latitude}, ${request.coordinates.longitude}], 16);
+                          var customerLat = ${request.coordinates.latitude};
+                          var customerLng = ${request.coordinates.longitude};
+                          var workerLat = ${workerMapLocation?.latitude || "null"};
+                          var workerLng = ${workerMapLocation?.longitude || "null"};
+                          var map = L.map('map').setView([workerLat || customerLat, workerLng || customerLng], 15);
                           L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
-                          L.marker([${request.coordinates.latitude}, ${request.coordinates.longitude}]).addTo(map).bindPopup("Customer's Pinned Location").openPopup();
+                          var customerMarker = L.marker([customerLat, customerLng]).addTo(map).bindPopup("Customer's Pinned Location");
+                          var points = [[customerLat, customerLng]];
+                          if (workerLat && workerLng) {
+                            var workerMarker = L.circleMarker([workerLat, workerLng], {
+                              radius: 8,
+                              color: '#0b4f7f',
+                              fillColor: '#1677b8',
+                              fillOpacity: 0.95
+                            }).addTo(map).bindPopup("Your Current Location");
+                            points.push([workerLat, workerLng]);
+                            map.fitBounds(points, { padding: [28, 28] });
+                            fetch('https://router.project-osrm.org/route/v1/driving/' + workerLng + ',' + workerLat + ';' + customerLng + ',' + customerLat + '?overview=full&geometries=geojson')
+                              .then(function(response) { return response.json(); })
+                              .then(function(data) {
+                                var route = data && data.routes && data.routes[0];
+                                if (!route) throw new Error('No route');
+                                var routeCoords = route.geometry.coordinates.map(function(item) { return [item[1], item[0]]; });
+                                L.polyline(routeCoords, { color: '#1677b8', weight: 5, opacity: 0.85 }).addTo(map);
+                                document.getElementById('routeNote').innerText = 'Suggested road route to the customer pin.';
+                              })
+                              .catch(function() {
+                                L.polyline([[workerLat, workerLng], [customerLat, customerLng]], { color: '#1677b8', weight: 4, opacity: 0.65, dashArray: '8,8' }).addTo(map);
+                                document.getElementById('routeNote').innerText = 'Road routing is unavailable. Showing direct direction line.';
+                              });
+                          } else {
+                            customerMarker.openPopup();
+                          }
                       </script>
                   </body>
                   </html>
@@ -2904,7 +2942,15 @@ const optimisticRequest = {
 
     const pickedPhotos = (result.assets || []).filter((item) => item?.uri).slice(0, 3);
     setCompletionProofError("");
-    setCompletionProofPhotos(pickedPhotos);
+    setCompletionProofPhotos((current) => {
+      const combined = [...current, ...pickedPhotos];
+      return combined.slice(0, 3);
+    });
+  };
+
+  const removeCompletionProofPhoto = (indexToRemove) => {
+    setCompletionProofError("");
+    setCompletionProofPhotos((current) => current.filter((_, index) => index !== indexToRemove));
   };
 
   const submitCompletionProof = async () => {
@@ -3391,6 +3437,10 @@ const optimisticRequest = {
               setMenuVisible(false);
               navigateTo("profile", "forward");
             }}
+            onOpenAbout={() => {
+              setMenuVisible(false);
+              navigateTo("about-us", "forward");
+            }}
             menuVisible={menuVisible}
             onSignOut={async () => {
               setMenuVisible(false);
@@ -3399,6 +3449,7 @@ const optimisticRequest = {
             }}
           />
         )}
+        {screen === "about-us" && <AboutUsScreen onBack={goBackToDashboard} />}
         {screen === "notifications" && (
           <NotificationScreen
             onBack={goBackToDashboard}
@@ -3628,6 +3679,7 @@ const optimisticRequest = {
         photos={completionProofPhotos}
         errorMessage={completionProofError}
         onPickPhotos={pickCompletionProofPhotos}
+        onRemovePhoto={removeCompletionProofPhoto}
         onClose={() => {
           if (completionSubmitting) return;
           setCompletionProofVisible(false);
@@ -4267,6 +4319,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     padding: 14
   },
+  centeredModalBackdrop: {
+    alignItems: "center"
+  },
   profileModalCard: {
     backgroundColor: "#fff",
     borderRadius: 8,
@@ -4850,7 +4905,8 @@ const styles = StyleSheet.create({
     padding: 16,
     width: "100%",
     maxWidth: 360,
-    maxHeight: "85%"
+    maxHeight: "85%",
+    alignSelf: "center"
   },
   proofViewerScroll: {
     gap: 12,
@@ -5091,6 +5147,22 @@ const styles = StyleSheet.create({
     gap: 10,
     paddingVertical: 4
   },
+  proofThumbWrap: {
+    position: "relative"
+  },
+  proofRemoveButton: {
+    position: "absolute",
+    top: -6,
+    right: -6,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: theme.danger,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "#fff"
+  },
   proofGalleryImage: {
     width: 130,
     height: 130,
@@ -5307,6 +5379,26 @@ const styles = StyleSheet.create({
     color: "#4f4f4f",
     lineHeight: 20,
     marginBottom: 8
+  },
+  aboutMemberCard: {
+    backgroundColor: "#f8fbfe",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: theme.border,
+    padding: 12,
+    marginBottom: 10
+  },
+  aboutMemberName: {
+    fontSize: 15,
+    fontWeight: "900",
+    color: theme.text
+  },
+  aboutMemberRole: {
+    marginTop: 4,
+    fontSize: 12,
+    color: theme.blueDark,
+    fontWeight: "700",
+    lineHeight: 17
   },
   chatInboxHeader: {
     backgroundColor: theme.surface,
