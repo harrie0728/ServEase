@@ -3,8 +3,11 @@ import {
   Animated,
   Dimensions,
   Easing,
+  FlatList,
   Image,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StatusBar,
@@ -23,7 +26,7 @@ import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { onAuthStateChanged } from "firebase/auth";
 import { signInWithFirebase, signOutFromFirebase, signUpWithFirebase } from "./src/firebase/auth";
 import { auth, db } from "./src/firebase/config";
-import { doc, onSnapshot, collection, query, where } from "firebase/firestore";
+import { addDoc, collection, doc, increment, onSnapshot, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from "firebase/firestore";
 import { getRequestsForProvider, updateProviderRequestStatus, updateWorkerLocation } from "./src/firebase/providerRequests";
 import { getNotificationsForUser, markNotificationsRead } from "./src/firebase/notifications";
 import {
@@ -48,19 +51,24 @@ import {
 import { getInlineImageData, getInlineProfileImageData } from "./src/firebase/storage";
 
 const theme = {
-  blue: "#1f7fc7",
-  blueDark: "#115d9c",
-  blueSoft: "#dfeeff",
+  blue: "#1677b8",
+  blueDark: "#0b4f7f",
+  blueSoft: "#e8f4ff",
+  blueTint: "#f3f9ff",
   yellow: "#f7c51e",
-  text: "#101010",
-  muted: "#6d6d6d",
+  text: "#17212b",
+  muted: "#687684",
   surface: "#ffffff",
-  bg: "#f5f5f5",
-  border: "#d7dce1",
-  cardBorder: "#c7c7c7"
+  bg: "#f6f8fb",
+  border: "#dce5ee",
+  cardBorder: "#e1e8ef",
+  success: "#21a85b",
+  danger: "#d94a4a",
+  navy: "#0d314f"
 };
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
+const SCREEN_HEIGHT = Dimensions.get("window").height;
 const MAX_PROOF_INLINE_BYTES = 850000;
 
 const serviceShortcuts = [
@@ -197,6 +205,24 @@ const emptyRequestForm = {
   landmark: "",
   concern: ""
 };
+
+const chatEnabledStatuses = ["accepted", "on-the-way", "started", "completed"];
+
+function isChatEnabledForRequest(request) {
+  return !!request?.id && chatEnabledStatuses.includes(request.status);
+}
+
+function getRequestTimestampValue(request) {
+  return request?.updatedAt?.seconds || request?.createdAt?.seconds || 0;
+}
+
+function formatMessageTimestamp(ts) {
+  if (!ts?.seconds) return "Sending...";
+  return new Date(ts.seconds * 1000).toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit"
+  });
+}
 
 const customerGuideSections = [
   {
@@ -375,6 +401,31 @@ function PrimaryButton({ title, onPress, style, textStyle, disabled = false }) {
   );
 }
 
+function IconCircleButton({ icon, onPress, badgeCount = 0 }) {
+  return (
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.iconCircleButton, pressed && styles.buttonPressed]}>
+      <Ionicons name={icon} size={22} color={theme.navy} />
+      {badgeCount > 0 ? (
+        <View style={styles.headerBellBadge}>
+          <Text style={styles.headerBellBadgeText}>{badgeCount > 9 ? "9+" : badgeCount}</Text>
+        </View>
+      ) : null}
+    </Pressable>
+  );
+}
+
+function EmptyState({ icon = "file-tray-outline", title, body }) {
+  return (
+    <View style={styles.emptyStateCard}>
+      <View style={styles.emptyStateIcon}>
+        <Ionicons name={icon} size={24} color={theme.blueDark} />
+      </View>
+      <Text style={styles.emptyStateTitle}>{title}</Text>
+      {body ? <Text style={styles.emptyStateBody}>{body}</Text> : null}
+    </View>
+  );
+}
+
 function AuthCard({ title, fields, actionLabel, footerLeft, footerRight, onAction, onFooterRight, values, onChangeText, errorMessage, isLoading }) {
   return (
     <View style={styles.authCard}>
@@ -444,74 +495,77 @@ function StartScreen({ onNext }) {
 
 function SignInScreen({ onLogin, onGoSignUp, values, onChangeText, errorMessage, isLoading }) {
   return (
-    <ScrollView contentContainerStyle={styles.authScreen}>
-      <BrandBlock compact />
-      <AuthCard
-        title="SIGN-IN"
-        fields={[
-          { key: "email", label: "Email Address:", keyboardType: "email-address" },
-          { key: "password", label: "Password:", secureTextEntry: true }
-        ]}
-        actionLabel="LOGIN"
-        footerLeft="Forgot Password"
-        footerRight="NO ACCOUNT? SIGN-UP"
-        onAction={onLogin}
-        onFooterRight={onGoSignUp}
-        values={values}
-        onChangeText={onChangeText}
-        errorMessage={errorMessage}
-        isLoading={isLoading}
-      />
-    </ScrollView>
+    <KeyboardAvoidingView style={styles.keyboardAvoiding} behavior={Platform.OS === "ios" ? "padding" : "height"}>
+      <ScrollView contentContainerStyle={styles.authScreen} keyboardShouldPersistTaps="handled">
+        <BrandBlock compact />
+        <AuthCard
+          title="SIGN-IN"
+          fields={[
+            { key: "email", label: "Email Address:", keyboardType: "email-address" },
+            { key: "password", label: "Password:", secureTextEntry: true }
+          ]}
+          actionLabel="LOGIN"
+          footerLeft="Forgot Password"
+          footerRight="NO ACCOUNT? SIGN-UP"
+          onAction={onLogin}
+          onFooterRight={onGoSignUp}
+          values={values}
+          onChangeText={onChangeText}
+          errorMessage={errorMessage}
+          isLoading={isLoading}
+        />
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 function SignUpScreen({ onSignUp, onGoSignIn, values, onChangeText, errorMessage, isLoading }) {
   return (
-    <ScrollView contentContainerStyle={styles.authScreen}>
-      <BrandBlock compact />
-      <AuthCard
-        title="SIGN-UP"
-        fields={[
-          { key: "email", label: "Email Address:", keyboardType: "email-address" },
-          { key: "password", label: "Password:", secureTextEntry: true },
-          { key: "confirmPassword", label: "Confirm Password:", secureTextEntry: true }
-        ]}
-        actionLabel="SIGN-UP"
-        footerLeft="HAVE AN ACCOUNT?"
-        footerRight="SIGN-IN"
-        onAction={onSignUp}
-        onFooterRight={onGoSignIn}
-        values={values}
-        onChangeText={onChangeText}
-        errorMessage={errorMessage}
-        isLoading={isLoading}
-      />
-    </ScrollView>
+    <KeyboardAvoidingView style={styles.keyboardAvoiding} behavior={Platform.OS === "ios" ? "padding" : "height"}>
+      <ScrollView contentContainerStyle={styles.authScreen} keyboardShouldPersistTaps="handled">
+        <BrandBlock compact />
+        <AuthCard
+          title="SIGN-UP"
+          fields={[
+            { key: "email", label: "Email Address:", keyboardType: "email-address" },
+            { key: "password", label: "Password:", secureTextEntry: true },
+            { key: "confirmPassword", label: "Confirm Password:", secureTextEntry: true }
+          ]}
+          actionLabel="SIGN-UP"
+          footerLeft="HAVE AN ACCOUNT?"
+          footerRight="SIGN-IN"
+          onAction={onSignUp}
+          onFooterRight={onGoSignIn}
+          values={values}
+          onChangeText={onChangeText}
+          errorMessage={errorMessage}
+          isLoading={isLoading}
+        />
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
-function HeaderArea({ unreadCount = 0, onMenuPress, onBellPress, onGuidePress }) {
+function HeaderArea({ unreadCount = 0, chatUnreadCount = 0, onMenuPress, onBellPress, onChatPress, onGuidePress }) {
   return (
-    <LinearGradient colors={["#134f80", "#2c85c6", "#87bee9"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.headerArea}>
+    <LinearGradient colors={["#082f4d", "#126da8", "#43a4d8"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.headerArea}>
       <Image source={{ uri: featuredImages.hero }} style={styles.heroImage} />
       <View style={styles.headerOverlay} />
       <View style={styles.headerIcons}>
-        <Pressable onPress={onBellPress} style={styles.headerBellButton}>
-          <Ionicons name="notifications-outline" size={24} color="#fff" />
-          {unreadCount > 0 ? (
-            <View style={styles.headerBellBadge}>
-              <Text style={styles.headerBellBadgeText}>{unreadCount > 9 ? "9+" : unreadCount}</Text>
-            </View>
-          ) : null}
-        </Pressable>
-        <Pressable onPress={onMenuPress}>
-          <Feather name="menu" size={24} color="#fff" />
+        <IconCircleButton icon="notifications-outline" onPress={onBellPress} badgeCount={unreadCount} />
+        <IconCircleButton icon="chatbubble-ellipses-outline" onPress={onChatPress} badgeCount={chatUnreadCount} />
+        <Pressable onPress={onMenuPress} style={({ pressed }) => [styles.iconCircleButton, pressed && styles.buttonPressed]}>
+          <Feather name="menu" size={22} color={theme.navy} />
         </Pressable>
       </View>
+      <View style={styles.headerCopy}>
+        <Text style={styles.headerEyebrow}>ServEase</Text>
+        <Text style={styles.headerTitle}>What can we fix today?</Text>
+        <Text style={styles.headerSubtitle}>Book trusted home service workers near you.</Text>
+      </View>
       <Pressable onPress={onGuidePress} style={styles.guidePill}>
-        <Ionicons name="book-outline" size={18} color="#0ea7a0" />
-        <Text style={styles.guideText}>Manual/Guide</Text>
+        <Ionicons name="book-outline" size={18} color={theme.blueDark} />
+        <Text style={styles.guideText}>Guide</Text>
       </Pressable>
     </LinearGradient>
   );
@@ -552,11 +606,15 @@ function ServiceList({ onSelect }) {
     <View>
       <Text style={styles.sectionTitle}>Create a Request</Text>
       {serviceShortcuts.map((item) => (
-        <Pressable key={item.detail} style={styles.serviceCard} onPress={() => onSelect(item.key)}>
+        <Pressable key={item.detail} style={({ pressed }) => [styles.serviceCard, pressed && styles.cardPressed]} onPress={() => onSelect(item.key)}>
           <View style={styles.serviceIconBox}>
             <Ionicons name={item.icon} size={28} color={theme.blueDark} />
           </View>
-          <Text style={styles.serviceCardText}>{item.detail}</Text>
+          <View style={styles.serviceCardBody}>
+            <Text style={styles.serviceCardText}>{item.detail}</Text>
+            <Text style={styles.serviceCardSub}>Start a booking request</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={theme.muted} />
         </Pressable>
       ))}
     </View>
@@ -565,11 +623,13 @@ function ServiceList({ onSelect }) {
 
 function DashboardScreen({
   unreadCount = 0,
+  chatUnreadCount = 0,
   showLocationModal = false,
   menuVisible = false,
   onEnableLocation,
   onLater,
   onOpenNotifications,
+  onOpenMessages,
   onOpenService,
   onOpenOffer,
   onOpenHistory,
@@ -580,11 +640,11 @@ function DashboardScreen({
   onOpenProfile,
   onSignOut
 }) {
-  const menuSlide = useRef(new Animated.Value(180)).current;
+  const menuSlide = useRef(new Animated.Value(220)).current;
 
   useEffect(() => {
     Animated.timing(menuSlide, {
-      toValue: menuVisible ? 0 : 180,
+      toValue: menuVisible ? 0 : 220,
       duration: 220,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true
@@ -593,19 +653,28 @@ function DashboardScreen({
 
   return (
     <View style={styles.dashboardScreen}>
-      <HeaderArea unreadCount={unreadCount} onBellPress={onOpenNotifications} onMenuPress={onMenuPress} onGuidePress={onOpenGuide} />
+      <HeaderArea unreadCount={unreadCount} chatUnreadCount={chatUnreadCount} onBellPress={onOpenNotifications} onChatPress={onOpenMessages} onMenuPress={onMenuPress} onGuidePress={onOpenGuide} />
       <ScrollView contentContainerStyle={styles.dashboardContent}>
         <FeaturedCarousel />
         <Text style={styles.sectionTitle}>Offered Services</Text>
         <ShortcutGrid onSelect={onOpenOffer} />
         <ServiceList onSelect={onOpenService} />
-        <Text style={[styles.sectionTitle, styles.historyTitle]}>View Request History</Text>
-        <View style={styles.historyCard}>
-          <PrimaryButton title="VIEW HISTORY" onPress={onOpenHistory} style={styles.largeActionButton} />
-        </View>
-        <Text style={[styles.sectionTitle, styles.ongoingTitle]}>On-going Request</Text>
-        <View style={styles.historyCard}>
-          <PrimaryButton title="View On-going Request" onPress={onOpenOngoing} style={styles.largeActionButton} textStyle={styles.ongoingButtonText} />
+        <Text style={[styles.sectionTitle, styles.historyTitle]}>Requests</Text>
+        <View style={styles.quickActionGrid}>
+          <Pressable style={({ pressed }) => [styles.quickActionCard, pressed && styles.cardPressed]} onPress={onOpenOngoing}>
+            <View style={styles.quickActionIcon}>
+              <Ionicons name="time-outline" size={24} color={theme.blueDark} />
+            </View>
+            <Text style={styles.quickActionTitle}>On-going</Text>
+            <Text style={styles.quickActionBody}>Track live status</Text>
+          </Pressable>
+          <Pressable style={({ pressed }) => [styles.quickActionCard, pressed && styles.cardPressed]} onPress={onOpenHistory}>
+            <View style={styles.quickActionIcon}>
+              <Ionicons name="receipt-outline" size={24} color={theme.blueDark} />
+            </View>
+            <Text style={styles.quickActionTitle}>History</Text>
+            <Text style={styles.quickActionBody}>Reviews and proof</Text>
+          </Pressable>
         </View>
       </ScrollView>
       <Modal transparent visible={showLocationModal} animationType="fade">
@@ -681,7 +750,7 @@ function ServiceFormScreen({ service, onBack, onSubmit, values, onChangeText, er
               </View>
               {field.key === "location" && values.coordinates ? (
                 <Text style={{ fontSize: 10, color: '#2d8fdb', marginTop: 4, fontWeight: '700' }}>
-                  📍 Pinned Coordinates Saved
+                  Pinned location saved
                 </Text>
               ) : null}
             </View>
@@ -1041,7 +1110,8 @@ function RequestStatusScreen({
   onLeaveReview,
   onReschedule,
   onCancel,
-  onDone
+  onDone,
+  onOpenChat
 }) {
   const currentIndex = statusSteps.findIndex((step) => step.key === activeStep);
   const disableCancel = ["completed", "cancelled", "on-the-way", "started"].includes(activeStep);
@@ -1138,6 +1208,9 @@ function RequestStatusScreen({
                 <PrimaryButton title="Reschedule" onPress={onReschedule} style={styles.statusMiniButton} textStyle={styles.statusMiniText} disabled={activeStep === "completed" || activeStep === "cancelled"} />
                 <PrimaryButton title="Cancel" onPress={onCancel} style={styles.statusMiniButton} textStyle={styles.statusMiniText} disabled={disableCancel} />
               </View>
+              {isChatEnabledForRequest(request) ? (
+                <PrimaryButton title="MESSAGE WORKER" onPress={() => onOpenChat?.(request)} style={styles.chatOpenButton} textStyle={styles.historyEntryButtonText} />
+              ) : null}
               <View style={styles.timelineWrap}>
                 {stampedSteps.map((item, index) => (
                   <TimelineStep
@@ -1533,39 +1606,233 @@ function CustomerGuideScreen({ onBack }) {
   );
 }
 
-function ProviderDashboardScreen({ profile, requests, loading, onOpenRequests, onOpenHistory, onOpenProfile, onSignOut }) {
+function ChatInboxScreen({ requests, threadSummaries, currentUser, isProvider, onBack, onOpenChat }) {
+  const chatRequests = requests
+    .filter(isChatEnabledForRequest)
+    .sort((a, b) => {
+      const aSummary = threadSummaries[a.id];
+      const bSummary = threadSummaries[b.id];
+      return (bSummary?.latestMessageAt?.seconds || getRequestTimestampValue(b)) - (aSummary?.latestMessageAt?.seconds || getRequestTimestampValue(a));
+    });
+
+  return (
+    <View style={styles.serviceScreen}>
+      <View style={styles.serviceBgOverlay} />
+      <ScrollView contentContainerStyle={styles.serviceScroll}>
+        <Pressable onPress={onBack} style={styles.formBackIcon}>
+          <Ionicons name="arrow-back-circle-outline" size={28} color="#1f1f1f" />
+        </Pressable>
+        <View style={styles.chatInboxHeader}>
+          <Text style={styles.chatInboxTitle}>Messages</Text>
+          <Text style={styles.chatInboxSub}>Chat becomes available after a request is accepted.</Text>
+        </View>
+        {chatRequests.length ? (
+          chatRequests.map((request) => {
+            const summary = threadSummaries[request.id] || {};
+            const unreadCount = summary.unreadBy?.[currentUser?.uid] || 0;
+            const displayName = isProvider ? request.customerName || "Customer" : request.providerName || "Worker";
+            const latestText = summary.latestImage ? "Photo message" : summary.latestText;
+
+            return (
+              <Pressable key={request.id} style={({ pressed }) => [styles.chatThreadCard, pressed && styles.cardPressed]} onPress={() => onOpenChat(request)}>
+                <View style={styles.chatThreadAvatar}>
+                  <Ionicons name={isProvider ? "person-outline" : "construct-outline"} size={24} color={theme.blueDark} />
+                </View>
+                <View style={styles.chatThreadBody}>
+                  <View style={styles.chatThreadTop}>
+                    <Text style={styles.chatThreadName}>{displayName}</Text>
+                    <Text style={styles.chatThreadTime}>{summary.latestMessageAt ? formatMessageTimestamp(summary.latestMessageAt) : request.status}</Text>
+                  </View>
+                  <Text style={styles.chatThreadPreview} numberOfLines={1}>
+                    {latestText || `${request.serviceLabel || "Service"} request`}
+                  </Text>
+                </View>
+                {unreadCount > 0 ? (
+                  <View style={styles.chatUnreadBadge}>
+                    <Text style={styles.chatUnreadText}>{unreadCount > 9 ? "9+" : unreadCount}</Text>
+                  </View>
+                ) : null}
+              </Pressable>
+            );
+          })
+        ) : (
+          <EmptyState icon="chatbubble-ellipses-outline" title="No conversations yet" body="Accepted service requests will appear here automatically." />
+        )}
+      </ScrollView>
+    </View>
+  );
+}
+
+function ChatMessageBubble({ message, isMine }) {
+  const status = message.seenAt ? "Seen" : "Sent";
+
+  return (
+    <View style={[styles.chatMessageRow, isMine ? styles.chatMessageRowMine : styles.chatMessageRowOther]}>
+      <View style={[styles.chatBubble, isMine ? styles.chatBubbleMine : styles.chatBubbleOther]}>
+        {message.imageUri ? <Image source={{ uri: message.imageUri }} style={styles.chatImage} /> : null}
+        {message.text ? <Text style={[styles.chatBubbleText, isMine && styles.chatBubbleTextMine]}>{message.text}</Text> : null}
+        <View style={styles.chatMetaRow}>
+          <Text style={[styles.chatTimeText, isMine && styles.chatTimeTextMine]}>{formatMessageTimestamp(message.createdAt)}</Text>
+          {isMine ? <Text style={styles.chatStatusText}>{status}</Text> : null}
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function ChatScreen({
+  request,
+  currentUser,
+  isProvider,
+  messages,
+  typingState,
+  chatText,
+  imageSending,
+  sending,
+  onBack,
+  onChangeText,
+  onSend,
+  onPickImage
+}) {
+  const listRef = useRef(null);
+  const chatMessages = messages;
+  const otherName = isProvider ? request?.customerName || "Customer" : request?.providerName || "Worker";
+  const otherTyping = isProvider ? typingState?.customerTyping : typingState?.workerTyping;
+
+  useEffect(() => {
+    const timer = setTimeout(() => listRef.current?.scrollToEnd?.({ animated: true }), 80);
+    return () => clearTimeout(timer);
+  }, [chatMessages.length, otherTyping]);
+
+  return (
+    <KeyboardAvoidingView style={styles.chatScreen} behavior={Platform.OS === "ios" ? "padding" : "height"} keyboardVerticalOffset={0}>
+      <View style={styles.chatHeader}>
+        <Pressable onPress={onBack} style={styles.chatBackButton}>
+          <Ionicons name="chevron-back" size={26} color={theme.text} />
+        </Pressable>
+        <View style={styles.chatHeaderAvatar}>
+          <Ionicons name={isProvider ? "person-outline" : "construct-outline"} size={22} color={theme.blueDark} />
+        </View>
+        <View style={styles.chatHeaderTextWrap}>
+          <Text style={styles.chatHeaderName}>{otherName}</Text>
+          <Text style={styles.chatHeaderSub}>{request?.serviceLabel || "Service request"}</Text>
+        </View>
+      </View>
+
+      <FlatList
+        ref={listRef}
+        data={chatMessages}
+        keyExtractor={(item) => item.id}
+        renderItem={({ item }) => <ChatMessageBubble message={item} isMine={item.senderId === currentUser?.uid} />}
+        contentContainerStyle={styles.chatMessagesContent}
+        keyboardShouldPersistTaps="handled"
+        removeClippedSubviews
+        initialNumToRender={18}
+        maxToRenderPerBatch={12}
+        windowSize={9}
+        ListEmptyComponent={
+          <EmptyState icon="chatbubbles-outline" title="Start the conversation" body="Send a message if the phone number cannot be reached." />
+        }
+        ListFooterComponent={
+          otherTyping ? (
+            <Animated.View style={styles.typingBubble}>
+              <Text style={styles.typingText}>{isProvider ? "Customer is typing..." : "Worker is typing..."}</Text>
+            </Animated.View>
+          ) : null
+        }
+      />
+
+      <View style={styles.chatComposerWrap}>
+        <Pressable onPress={onPickImage} style={({ pressed }) => [styles.chatImageButton, pressed && styles.buttonPressed]} disabled={imageSending}>
+          <Ionicons name={imageSending ? "hourglass-outline" : "image-outline"} size={22} color={theme.blueDark} />
+        </Pressable>
+        <TextInput
+          style={styles.chatInput}
+          value={chatText}
+          onChangeText={onChangeText}
+          placeholder="Type a message"
+          placeholderTextColor="#8a98a6"
+          multiline
+        />
+        <Pressable onPress={onSend} style={({ pressed }) => [styles.chatSendButton, (!chatText.trim() || sending) && styles.chatSendButtonDisabled, pressed && !sending && styles.buttonPressed]} disabled={!chatText.trim() || sending}>
+          <Ionicons name={sending ? "hourglass-outline" : "send"} size={20} color="#fff" />
+        </Pressable>
+      </View>
+    </KeyboardAvoidingView>
+  );
+}
+
+function ProviderDashboardScreen({ profile, requests, loading, chatUnreadCount = 0, onOpenRequests, onOpenHistory, onOpenMessages, onOpenProfile, onSignOut }) {
   const historyCount = requests.filter((item) => ["completed", "cancelled"].includes(item.status)).length;
   const activeCount = requests.filter((item) => !["completed", "cancelled"].includes(item.status)).length;
+  const serviceSummary = (profile?.serviceTypes || [profile?.serviceType || "plumbing"]).filter(Boolean).join(", ");
   return (
     <View style={styles.serviceScreen}>
       <Image source={{ uri: featuredImages.formBg }} style={styles.serviceBgImage} />
       <View style={styles.serviceBgOverlay} />
       <ScrollView contentContainerStyle={styles.serviceScroll}>
         <View style={styles.workerHero}>
-          <Text style={styles.workerHeroEyebrow}>Worker Dashboard</Text>
-          <Text style={styles.workerHeroTitle}>Provider</Text>
-          {profile?.photoURL ? <Image source={{ uri: profile.photoURL }} style={styles.profileImageLarge} /> : null}
-          <Text style={styles.workerHeroSub}>{profile?.displayName || "Harrie Abel"}</Text>
-          <Text style={styles.workerHeroSub}>{profile?.email || SPECIAL_WORKER_EMAIL}</Text>
-          <Text style={styles.workerHeroSub}>{profile?.bio || "No bio yet."}</Text>
+          <View style={styles.workerHeroTop}>
+            <View>
+              <Text style={styles.workerHeroEyebrow}>Worker Dashboard</Text>
+              <Text style={styles.workerHeroTitle}>{profile?.displayName || "Provider"}</Text>
+              <Text style={styles.workerHeroSub}>{profile?.email || SPECIAL_WORKER_EMAIL}</Text>
+            </View>
+            {profile?.photoURL ? (
+              <Image source={{ uri: profile.photoURL }} style={styles.workerHeroAvatar} />
+            ) : (
+              <View style={styles.workerHeroAvatar}>
+                <Ionicons name="person-outline" size={34} color={theme.blueDark} />
+              </View>
+            )}
+          </View>
+          <Text style={styles.workerBioText}>{profile?.bio || "No bio yet."}</Text>
+          <View style={styles.liveStatusPill}>
+            <View style={styles.liveStatusDot} />
+            <Text style={styles.liveStatusText}>Request updates are live</Text>
+          </View>
+          <PrimaryButton
+            title={chatUnreadCount > 0 ? `MESSAGES (${chatUnreadCount})` : "MESSAGES"}
+            onPress={onOpenMessages}
+            style={styles.workerActionButton}
+            textStyle={styles.historyEntryButtonText}
+          />
           <PrimaryButton title="MY PROFILE" onPress={onOpenProfile} style={styles.workerActionButton} textStyle={styles.historyEntryButtonText} />
         </View>
 
-        <View style={styles.workerPanel}>
-          <Text style={styles.workerPanelTitle}>My Service Jobs</Text>
+        <View style={styles.workerStatsRow}>
+          <Pressable style={({ pressed }) => [styles.workerStatCard, pressed && styles.cardPressed]} onPress={onOpenRequests}>
+            <Text style={styles.workerStatNumber}>{loading ? "-" : activeCount}</Text>
+            <Text style={styles.workerStatLabel}>Active Jobs</Text>
+          </Pressable>
+          <Pressable style={({ pressed }) => [styles.workerStatCard, pressed && styles.cardPressed]} onPress={onOpenHistory}>
+            <Text style={styles.workerStatNumber}>{loading ? "-" : historyCount}</Text>
+            <Text style={styles.workerStatLabel}>History</Text>
+          </Pressable>
+        </View>
+
+        <Pressable style={({ pressed }) => [styles.workerPanel, pressed && styles.cardPressed]} onPress={onOpenRequests}>
+          <View style={styles.panelHeadingRow}>
+            <Text style={styles.workerPanelTitle}>My Service Jobs</Text>
+            <Ionicons name="chevron-forward" size={20} color={theme.muted} />
+          </View>
           <Text style={styles.workerPanelText}>
             {loading
               ? "Loading requests..."
-              : `You currently have ${activeCount} active request(s) across: ${(profile?.serviceTypes || ["plumbing"]).join(", ")}.`}
+              : `You currently have ${activeCount} active request(s) across: ${serviceSummary}.`}
           </Text>
-          <PrimaryButton title="VIEW REQUESTS" onPress={onOpenRequests} style={styles.workerActionButton} textStyle={styles.historyEntryButtonText} />
-        </View>
+          {!loading && activeCount === 0 ? <EmptyState icon="briefcase-outline" title="No active requests" body="New customer requests will appear here automatically." /> : null}
+        </Pressable>
 
         <View style={styles.workerPanel}>
+          <View style={styles.panelHeadingRow}>
           <Text style={styles.workerPanelTitle}>History</Text>
+            <Ionicons name="chevron-forward" size={20} color={theme.muted} />
+          </View>
           <Text style={styles.workerPanelText}>
             {loading ? "Loading history..." : historyCount > 0 ? `You have ${historyCount} completed or cancelled request(s) in history.` : "Empty history."}
           </Text>
+          {!loading && historyCount === 0 ? <EmptyState icon="archive-outline" title="No finished jobs" body="Completed and cancelled work will be collected here." /> : null}
           <PrimaryButton title="VIEW HISTORY" onPress={onOpenHistory} style={styles.workerActionButton} textStyle={styles.historyEntryButtonText} />
           <PrimaryButton title="SIGN OUT" onPress={onSignOut} style={styles.workerSecondaryButton} textStyle={styles.historyEntryButtonText} />
         </View>
@@ -1592,7 +1859,10 @@ function ProviderRequestsScreen({ requests, loading, onBack, onOpenRequest }) {
           <Ionicons name="arrow-back-circle-outline" size={28} color="#1f1f1f" />
         </Pressable>
         <View style={styles.workerPanel}>
-          <Text style={styles.workerPanelTitle}>My Service Jobs</Text>
+          <View style={styles.panelHeadingRow}>
+            <Text style={styles.workerPanelTitle}>My Service Jobs</Text>
+            <Text style={styles.countBadge}>{loading ? "-" : activeRequests.length}</Text>
+          </View>
           <Text style={styles.workerPanelText}>{loading ? "Loading..." : `${activeRequests.length} active request(s) found.`}</Text>
         </View>
 
@@ -1600,10 +1870,13 @@ function ProviderRequestsScreen({ requests, loading, onBack, onOpenRequest }) {
           const sectionRequests = activeRequests.filter((item) => item.serviceKey === section.key);
           return (
             <View key={section.key} style={styles.workerPanel}>
-              <Text style={styles.workerPanelTitle}>{section.title}</Text>
+              <View style={styles.panelHeadingRow}>
+                <Text style={styles.workerPanelTitle}>{section.title}</Text>
+                <Text style={styles.countBadge}>{sectionRequests.length}</Text>
+              </View>
               {sectionRequests.length ? (
                 sectionRequests.map((request) => (
-                  <Pressable key={request.id} style={styles.workerRequestCard} onPress={() => onOpenRequest(request)}>
+                  <Pressable key={request.id} style={({ pressed }) => [styles.workerRequestCard, pressed && styles.cardPressed]} onPress={() => onOpenRequest(request)}>
                     <View style={styles.workerRequestTop}>
                       <Text style={styles.workerRequestName}>{request.customerName || "Unknown Customer"}</Text>
                       <Text style={styles.workerRequestBadge}>{request.status || "requested"}</Text>
@@ -1613,7 +1886,7 @@ function ProviderRequestsScreen({ requests, loading, onBack, onOpenRequest }) {
                   </Pressable>
                 ))
               ) : (
-                <Text style={styles.providerEmptyText}>No active requests.</Text>
+                <EmptyState icon="checkmark-done-outline" title="No active requests" body="This service is clear right now." />
               )}
             </View>
           );
@@ -1635,19 +1908,22 @@ function ProviderHistoryScreen({ requests, loading, onBack, onOpenRequest }) {
           <Ionicons name="arrow-back-circle-outline" size={28} color="#1f1f1f" />
         </Pressable>
         <View style={styles.workerPanel}>
-          <Text style={styles.workerPanelTitle}>History</Text>
+          <View style={styles.panelHeadingRow}>
+            <Text style={styles.workerPanelTitle}>History</Text>
+            <Text style={styles.countBadge}>{loading ? "-" : historyRequests.length}</Text>
+          </View>
           <Text style={styles.workerPanelText}>{loading ? "Loading..." : `${historyRequests.length} history request(s) found.`}</Text>
         </View>
         {historyRequests.map((request) => (
           <HistoryEntry key={request.id} title={request.serviceLabel || "History"} buttonTitle="View Details" onPress={() => onOpenRequest(request)} request={request} isWorkerHistory />
         ))}
-        {!loading && historyRequests.length === 0 ? <Text style={styles.providerEmptyText}>Empty history.</Text> : null}
+        {!loading && historyRequests.length === 0 ? <EmptyState icon="archive-outline" title="Empty history" body="Completed and cancelled requests will show here automatically." /> : null}
       </ScrollView>
     </View>
   );
 }
 
-function ProviderRequestDetailScreen({ request, onBack, onUpdateStatus, onCancelRequest }) {
+function ProviderRequestDetailScreen({ request, onBack, onUpdateStatus, onCancelRequest, onOpenChat }) {
   const nextActionMap = {
     requested: "Accept Request",
     accepted: "Mark On The Way",
@@ -1743,6 +2019,9 @@ function ProviderRequestDetailScreen({ request, onBack, onUpdateStatus, onCancel
               />
             </View>
           ) : null}
+          {isChatEnabledForRequest(request) ? (
+            <PrimaryButton title="Message Customer" onPress={() => onOpenChat?.(request)} style={styles.workerActionButton} textStyle={styles.historyEntryButtonText} />
+          ) : null}
           <PrimaryButton
             title={nextActionMap[request.status] || "Update"}
             onPress={onUpdateStatus}
@@ -1767,7 +2046,7 @@ function ProviderRequestDetailScreen({ request, onBack, onUpdateStatus, onCancel
 export default function App() {
   const [screen, setScreen] = useState("start");
   const [navDirection, setNavDirection] = useState("forward");
-  const [locationPromptVisible, setLocationPromptVisible] = useState(true);
+  const [locationPromptVisible, setLocationPromptVisible] = useState(false);
   const [selectedServiceKey, setSelectedServiceKey] = useState("plumbing");
   const [selectedProviderName, setSelectedProviderName] = useState("Juan Dela Cruz");
   const [providerOverlay, setProviderOverlay] = useState(null);
@@ -1812,7 +2091,20 @@ export default function App() {
   const [completionProofError, setCompletionProofError] = useState("");
   const [notifications, setNotifications] = useState([]);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [chatThreadSummaries, setChatThreadSummaries] = useState({});
+  const [activeChatMessages, setActiveChatMessages] = useState([]);
+  const [selectedChatRequest, setSelectedChatRequest] = useState(null);
+  const [chatReturnScreen, setChatReturnScreen] = useState("chat-inbox");
+  const [chatTypingState, setChatTypingState] = useState({});
+  const [chatText, setChatText] = useState("");
+  const [chatImageSending, setChatImageSending] = useState(false);
+  const [chatSending, setChatSending] = useState(false);
+  const lastSendFingerprint = useRef("");
+  const typingActive = useRef(false);
+  const seenMessageIds = useRef(new Set());
   const pageTranslate = useRef(new Animated.Value(0)).current;
+  const pageOpacity = useRef(new Animated.Value(1)).current;
+  const typingStopTimer = useRef(null);
 
   const selectedService = serviceShortcuts.find((item) => item.key === selectedServiceKey) || serviceShortcuts[0];
   const selectedProvider =
@@ -1820,6 +2112,9 @@ export default function App() {
     selectedService.providers.find((provider) => provider.name === selectedProviderName) ||
     providerOptions[0] ||
     selectedService.providers[0];
+  const isProviderUser = currentUserProfile?.role === "provider";
+  const chatSourceRequests = isProviderUser ? providerRequests : customerRequests;
+  const chatUnreadCount = Object.values(chatThreadSummaries).reduce((total, item) => total + (item.unreadBy?.[currentUser?.uid] || 0), 0);
 
   const navigateTo = (nextScreen, direction = "forward") => {
     setNavDirection(direction);
@@ -1842,6 +2137,37 @@ export default function App() {
     } finally {
       setProviderRequestsLoading(false);
     }
+  };
+
+  const normalizeProviderRequests = (snapshot, userId, userEmail = "", serviceTypes = []) => {
+    const normalizedEmail = (userEmail || "").trim().toLowerCase();
+    const normalizedServices = serviceTypes.filter(Boolean);
+
+    const requests = snapshot.docs
+      .map((item) => ({
+        id: item.id,
+        ...item.data()
+      }))
+      .filter((item) => {
+        const assignedUid = item.providerAssignedUid || item.providerUid || "";
+        const assignedEmail = (item.providerAssignedEmail || item.providerEmail || "").trim().toLowerCase();
+        const serviceMatch = !normalizedServices.length || normalizedServices.includes(item.serviceKey);
+
+        return (
+          (assignedUid && assignedUid === userId) ||
+          (normalizedEmail && assignedEmail === normalizedEmail) ||
+          (!assignedUid && !assignedEmail && serviceMatch)
+        );
+      });
+
+    const unique = new Map();
+    requests.forEach((item) => unique.set(item.id, item));
+
+    return Array.from(unique.values()).sort((a, b) => {
+      const aTime = a.createdAt?.seconds || 0;
+      const bTime = b.createdAt?.seconds || 0;
+      return bTime - aTime;
+    });
   };
 
   const loadCustomerRequests = async (userId) => {
@@ -2268,6 +2594,197 @@ const optimisticRequest = {
     navigateTo("notifications", "forward");
   };
 
+  const openChatInbox = () => {
+    navigateTo("chat-inbox", "forward");
+  };
+
+  const openChatForRequest = (request, returnScreen = screen) => {
+    if (!isChatEnabledForRequest(request)) return;
+    setSelectedChatRequest(request);
+    setChatReturnScreen(returnScreen || "chat-inbox");
+    setChatText("");
+    setActiveChatMessages([]);
+    seenMessageIds.current = new Set();
+    navigateTo("chat", "forward");
+  };
+
+  const closeActiveChat = async () => {
+    const requestToClose = selectedChatRequest;
+    if (typingStopTimer.current) {
+      clearTimeout(typingStopTimer.current);
+      typingStopTimer.current = null;
+    }
+    typingActive.current = false;
+    setChatText("");
+    setActiveChatMessages([]);
+    setChatTypingState({});
+    navigateTo(chatReturnScreen || "chat-inbox", "back");
+    if (requestToClose?.id) {
+      await updateTypingStatus(requestToClose, false);
+    }
+  };
+
+  const getChatRecipientId = (request) => {
+    if (!request || !currentUser) return "";
+    if (isProviderUser) return request.userId || "";
+    return request.providerAssignedUid || request.providerUid || "";
+  };
+
+  const getChatParticipants = (request) => {
+    const customerId = request?.userId || "";
+    const providerId = request?.providerAssignedUid || request?.providerUid || "";
+    return {
+      customerId,
+      providerId,
+      participantIds: [customerId, providerId].filter(Boolean)
+    };
+  };
+
+  const upsertChatThread = async (request, latestPayload = {}) => {
+    if (!request?.id || !currentUser) return;
+    const recipientId = getChatRecipientId(request);
+    const { customerId, providerId, participantIds } = getChatParticipants(request);
+    if (!recipientId || participantIds.length < 2) return;
+
+    await setDoc(
+      doc(db, "chatThreads", request.id),
+      {
+        requestId: request.id,
+        participantIds,
+        customerId,
+        providerId,
+        customerName: request.customerName || "",
+        providerName: request.providerName || "",
+        serviceLabel: request.serviceLabel || "",
+        latestText: latestPayload.text || "",
+        latestImage: !!latestPayload.imageUri,
+        latestSenderId: currentUser.uid,
+        latestMessageAt: serverTimestamp(),
+        [`unreadBy.${recipientId}`]: increment(1),
+        updatedAt: serverTimestamp()
+      },
+      { merge: true }
+    );
+  };
+
+  const updateTypingStatus = async (request, isTyping) => {
+    if (!request?.id || !currentUser) return;
+    const field = isProviderUser ? "workerTyping" : "customerTyping";
+    try {
+      await setDoc(
+        doc(db, "chatTyping", request.id),
+        {
+          requestId: request.id,
+          participantIds: getChatParticipants(request).participantIds,
+          [field]: isTyping,
+          [`${field}At`]: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        },
+        { merge: true }
+      );
+    } catch (error) {
+      console.log("Typing status skipped:", error?.message || error);
+    }
+  };
+
+  const handleChatTextChange = (value) => {
+    setChatText(value);
+    if (!selectedChatRequest?.id) return;
+
+    const hasText = !!value.trim();
+    if (hasText && !typingActive.current) {
+      typingActive.current = true;
+      updateTypingStatus(selectedChatRequest, true);
+    }
+    if (!hasText && typingActive.current) {
+      typingActive.current = false;
+      updateTypingStatus(selectedChatRequest, false);
+    }
+    if (typingStopTimer.current) {
+      clearTimeout(typingStopTimer.current);
+    }
+    typingStopTimer.current = setTimeout(() => {
+      if (typingActive.current) {
+        typingActive.current = false;
+        updateTypingStatus(selectedChatRequest, false);
+      }
+    }, 1600);
+  };
+
+  const sendChatMessage = async ({ text = "", imageUri = "" } = {}) => {
+    if (!selectedChatRequest || !currentUser) return;
+    if (!isChatEnabledForRequest(selectedChatRequest)) return;
+    if (chatSending && !imageUri) return;
+    const messageText = text.trim();
+    if (!messageText && !imageUri) return;
+    const recipientId = getChatRecipientId(selectedChatRequest);
+    if (!recipientId) return;
+
+    const fingerprint = `${selectedChatRequest.id}:${currentUser.uid}:${messageText}:${imageUri ? imageUri.slice(0, 64) : ""}`;
+    if (fingerprint === lastSendFingerprint.current) return;
+
+    try {
+      setChatSending(true);
+      lastSendFingerprint.current = fingerprint;
+      await addDoc(collection(db, "chatMessages"), {
+        requestId: selectedChatRequest.id,
+        participantIds: getChatParticipants(selectedChatRequest).participantIds,
+        serviceLabel: selectedChatRequest.serviceLabel || "",
+        senderId: currentUser.uid,
+        senderRole: isProviderUser ? "provider" : "customer",
+        senderName: isProviderUser ? currentUserProfile?.displayName || "Worker" : selectedChatRequest.customerName || currentUserProfile?.displayName || "Customer",
+        recipientId,
+        text: messageText,
+        imageUri,
+        seenAt: null,
+        createdAt: serverTimestamp()
+      });
+      await upsertChatThread(selectedChatRequest, { text: messageText, imageUri });
+      setChatText("");
+      typingActive.current = false;
+      await updateTypingStatus(selectedChatRequest, false);
+      setTimeout(() => {
+        if (lastSendFingerprint.current === fingerprint) {
+          lastSendFingerprint.current = "";
+        }
+      }, 1200);
+    } catch (error) {
+      lastSendFingerprint.current = "";
+      throw error;
+    } finally {
+      setChatSending(false);
+    }
+  };
+
+  const sendCurrentChatText = async () => {
+    await sendChatMessage({ text: chatText });
+  };
+
+  const pickChatImage = async () => {
+    if (!selectedChatRequest) return;
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) return;
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsEditing: true,
+      quality: 0.35,
+      base64: true
+    });
+
+    if (result.canceled) return;
+
+    try {
+      setChatImageSending(true);
+      const asset = result.assets?.[0];
+      if (!asset) return;
+      const inlinePhoto = await getInlineImageData(asset);
+      await sendChatMessage({ imageUri: inlinePhoto });
+    } finally {
+      setChatImageSending(false);
+    }
+  };
+
   const openNotificationRequest = async (notification) => {
     if (!notification?.requestId || !currentUser?.uid) {
       return;
@@ -2546,13 +3063,22 @@ const optimisticRequest = {
 
   useEffect(() => {
     pageTranslate.setValue(navDirection === "back" ? -SCREEN_WIDTH * 0.16 : SCREEN_WIDTH * 0.16);
-    Animated.timing(pageTranslate, {
-      toValue: 0,
-      duration: 220,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true
-    }).start();
-  }, [navDirection, pageTranslate, screen]);
+    pageOpacity.setValue(0.82);
+    Animated.parallel([
+      Animated.timing(pageTranslate, {
+        toValue: 0,
+        duration: 240,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true
+      }),
+      Animated.timing(pageOpacity, {
+        toValue: 1,
+        duration: 180,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true
+      })
+    ]).start();
+  }, [navDirection, pageOpacity, pageTranslate, screen]);
 
   useEffect(() => {
     if (screen === "dashboard" && currentUser?.uid && currentUserProfile?.role !== "provider") {
@@ -2560,7 +3086,7 @@ const optimisticRequest = {
     }
   }, [currentUser?.uid, currentUserProfile?.role, screen]);
 
-useEffect(() => {
+  useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       const hydrateUser = async () => {
         try {
@@ -2602,8 +3128,11 @@ useEffect(() => {
             setProviderRequests([]);
             setCustomerRequests([]);
             setNotifications([]);
+            setChatThreadSummaries({});
+            setActiveChatMessages([]);
             setOngoingRequest(null);
             setSelectedWorkerRequest(null);
+            setSelectedChatRequest(null);
             setNamePromptVisible(false);
             setScreen((current) => (current !== "start" && current !== "signin" && current !== "signup" ? "signin" : current));
           }
@@ -2620,39 +3149,189 @@ useEffect(() => {
 
     return unsubscribe;
   }, []);
-// --- NEW REAL-TIME STATUS LISTENER FOR CUSTOMERS ---
+
   useEffect(() => {
     let unsubscribe = () => {};
-    
-    // Only turn on the antenna if a Customer is logged in
+
     if (currentUser?.uid && currentUserProfile?.role !== "provider") {
       const q = query(collection(db, "requests"), where("userId", "==", currentUser.uid));
       
       unsubscribe = onSnapshot(q, (snapshot) => {
         const allRequests = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        
-        // Sort requests so the newest ones are at the top
         allRequests.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
         
         setCustomerRequests(allRequests);
         
-        // Auto-update the "Ongoing Request" widget on the dashboard
         const activeStatuses = ["requested", "accepted", "on-the-way", "started"];
         const ongoing = allRequests.find(item => activeStatuses.includes(item.status)) || null;
         setOngoingRequest(ongoing);
 
-        // Auto-update the Status Screen if the user is currently staring at it
         setSelectedCustomerRequest(currentSelected => {
           if (!currentSelected) return currentSelected;
           return allRequests.find(r => r.id === currentSelected.id) || currentSelected;
         });
       });
     }
-    
-    // Turn off the antenna if they log out
+
     return () => unsubscribe();
   }, [currentUser?.uid, currentUserProfile?.role]);
-  // --- END NEW REAL-TIME STATUS LISTENER ---
+
+  useEffect(() => {
+    let unsubscribe = () => {};
+
+    if (currentUser?.uid && currentUserProfile?.role === "provider") {
+      const serviceTypes = currentUserProfile?.serviceTypes || [currentUserProfile?.serviceType || "plumbing"];
+      const q = query(collection(db, "requests"));
+      setProviderRequestsLoading(true);
+
+      unsubscribe = onSnapshot(
+        q,
+        (snapshot) => {
+          const liveRequests = normalizeProviderRequests(snapshot, currentUser.uid, currentUser.email || "", serviceTypes);
+          setProviderRequests(liveRequests);
+          setSelectedWorkerRequest((currentSelected) => {
+            if (!currentSelected) return currentSelected;
+            return liveRequests.find((item) => item.id === currentSelected.id) || currentSelected;
+          });
+          setProviderRequestsLoading(false);
+        },
+        (error) => {
+          console.error("Worker request listener failed:", error);
+          setProviderRequestsLoading(false);
+        }
+      );
+    }
+
+    return () => unsubscribe();
+  }, [currentUser?.uid, currentUser?.email, currentUserProfile?.role, currentUserProfile?.serviceType, currentUserProfile?.serviceTypes]);
+
+  useEffect(() => {
+    let unsubscribe = () => {};
+
+    if (currentUser?.uid) {
+      unsubscribe = onSnapshot(
+        query(collection(db, "chatThreads"), where("participantIds", "array-contains", currentUser.uid)),
+        (snapshot) => {
+          const nextSummaries = {};
+          snapshot.docs.forEach((item) => {
+            const data = item.data();
+            nextSummaries[data.requestId || item.id] = {
+              id: item.id,
+              ...data
+            };
+          });
+          setChatThreadSummaries(nextSummaries);
+        },
+        (error) => {
+          console.error("Chat summary listener failed:", error);
+        }
+      );
+    } else {
+      setChatThreadSummaries({});
+    }
+
+    return () => unsubscribe();
+  }, [currentUser?.uid]);
+
+  useEffect(() => {
+    let unsubscribeMessages = () => {};
+    let unsubscribeTyping = () => {};
+
+    if (screen === "chat" && selectedChatRequest?.id && currentUser?.uid) {
+      const requestId = selectedChatRequest.id;
+      seenMessageIds.current = new Set();
+      const { customerId, providerId, participantIds } = getChatParticipants(selectedChatRequest);
+
+      setDoc(
+        doc(db, "chatThreads", requestId),
+        {
+          requestId,
+          participantIds,
+          customerId,
+          providerId,
+          customerName: selectedChatRequest.customerName || "",
+          providerName: selectedChatRequest.providerName || "",
+          serviceLabel: selectedChatRequest.serviceLabel || "",
+          [`unreadBy.${currentUser.uid}`]: 0,
+          updatedAt: serverTimestamp()
+        },
+        { merge: true }
+      ).catch((error) => console.log("Chat thread open update skipped:", error?.message || error));
+
+      unsubscribeMessages = onSnapshot(
+        query(collection(db, "chatMessages"), where("requestId", "==", requestId)),
+        (snapshot) => {
+          const messages = snapshot.docs
+            .map((item) => ({
+              id: item.id,
+              ...item.data()
+            }))
+            .sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
+
+          setActiveChatMessages(messages);
+
+          const unseenReceived = messages
+            .filter((item) => item.recipientId === currentUser.uid && !item.seenAt && !seenMessageIds.current.has(item.id))
+            .slice(0, 100);
+
+          if (unseenReceived.length) {
+            const batch = writeBatch(db);
+            unseenReceived.forEach((item) => {
+              seenMessageIds.current.add(item.id);
+              batch.update(doc(db, "chatMessages", item.id), {
+                seenAt: serverTimestamp()
+              });
+            });
+            batch.set(
+              doc(db, "chatThreads", requestId),
+              {
+                [`unreadBy.${currentUser.uid}`]: 0,
+                updatedAt: serverTimestamp()
+              },
+              { merge: true }
+            );
+            batch.commit().catch((error) => console.log("Chat seen update skipped:", error?.message || error));
+          }
+        },
+        (error) => {
+          console.error("Chat message listener failed:", error);
+        }
+      );
+
+      unsubscribeTyping = onSnapshot(doc(db, "chatTyping", requestId), (snapshot) => {
+        setChatTypingState(snapshot.exists() ? snapshot.data() : {});
+      });
+    } else {
+      setActiveChatMessages([]);
+      setChatTypingState({});
+    }
+
+    return () => {
+      unsubscribeMessages();
+      unsubscribeTyping();
+      if (typingActive.current && selectedChatRequest?.id) {
+        typingActive.current = false;
+        updateTypingStatus(selectedChatRequest, false);
+      }
+    };
+  }, [currentUser?.uid, screen, selectedChatRequest?.id]);
+
+  useEffect(() => {
+    return () => {
+      if (typingStopTimer.current) {
+        clearTimeout(typingStopTimer.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedChatRequest?.id) return;
+    const freshRequest = chatSourceRequests.find((item) => item.id === selectedChatRequest.id);
+    if (freshRequest) {
+      setSelectedChatRequest(freshRequest);
+    }
+  }, [chatSourceRequests, selectedChatRequest?.id]);
+
   if (!authReady) {
     return (
       <SafeAreaProvider>
@@ -2670,7 +3349,7 @@ useEffect(() => {
     <SafeAreaProvider>
     <SafeAreaView style={styles.safeArea} edges={["top", "bottom"]}>
       <StatusBar barStyle="dark-content" backgroundColor={theme.bg} translucent={false} />
-      <Animated.View style={[styles.pageTransitionWrap, { transform: [{ translateX: pageTranslate }] }]}>
+      <Animated.View style={[styles.pageTransitionWrap, { opacity: pageOpacity, transform: [{ translateX: pageTranslate }] }]}>
         {screen === "start" && <StartScreen onNext={() => navigateTo("signin", "forward")} />}
         {screen === "signin" && (
           <SignInScreen
@@ -2695,10 +3374,12 @@ useEffect(() => {
         {screen === "dashboard" && (
           <DashboardScreen
             unreadCount={notifications.filter((item) => !item.read).length}
+            chatUnreadCount={chatUnreadCount}
             showLocationModal={locationPromptVisible}
             onEnableLocation={() => setLocationPromptVisible(false)}
             onLater={() => setLocationPromptVisible(false)}
             onOpenNotifications={openNotifications}
+            onOpenMessages={openChatInbox}
             onOpenService={openServiceForm}
             onOpenOffer={openOfferedServices}
             onOpenHistory={openHistory}
@@ -2727,13 +3408,41 @@ useEffect(() => {
           />
         )}
         {screen === "customer-guide" && <CustomerGuideScreen onBack={goBackToDashboard} />}
+        {screen === "chat-inbox" && (
+          <ChatInboxScreen
+            requests={chatSourceRequests}
+            threadSummaries={chatThreadSummaries}
+            currentUser={currentUser}
+            isProvider={isProviderUser}
+            onBack={goBackToDashboard}
+            onOpenChat={openChatForRequest}
+          />
+        )}
+        {screen === "chat" && selectedChatRequest && (
+          <ChatScreen
+            request={selectedChatRequest}
+            currentUser={currentUser}
+            isProvider={isProviderUser}
+            messages={activeChatMessages}
+            typingState={chatTypingState}
+            chatText={chatText}
+            imageSending={chatImageSending}
+            sending={chatSending}
+            onBack={closeActiveChat}
+            onChangeText={handleChatTextChange}
+            onSend={sendCurrentChatText}
+            onPickImage={pickChatImage}
+          />
+        )}
         {screen === "provider-dashboard" && (
           <ProviderDashboardScreen
             profile={currentUserProfile}
             requests={providerRequests}
             loading={providerRequestsLoading}
+            chatUnreadCount={chatUnreadCount}
             onOpenRequests={openProviderRequests}
             onOpenHistory={openProviderHistory}
+            onOpenMessages={openChatInbox}
             onOpenProfile={() => navigateTo("profile", "forward")}
             onSignOut={async () => {
               await signOutFromFirebase();
@@ -2763,6 +3472,7 @@ useEffect(() => {
             onBack={() => navigateTo("provider-requests", "back")}
             onUpdateStatus={advanceWorkerRequest}
             onCancelRequest={cancelWorkerRequest}
+            onOpenChat={openChatForRequest}
           />
         )}
         {screen.startsWith("offer-") && <OfferedServicesScreen service={selectedService} onBack={goBackToDashboard} />}
@@ -2815,6 +3525,7 @@ useEffect(() => {
           onReschedule={() => setRescheduleVisible(true)}
           onCancel={() => setCancelConfirmVisible(true)}
           onDone={goBackToDashboard}
+          onOpenChat={openChatForRequest}
         />
       )}
       {screen.startsWith("proof-") && (
@@ -2830,6 +3541,7 @@ useEffect(() => {
           onReschedule={() => {}}
           onCancel={() => {}}
           onDone={() => navigateTo(`status-${selectedServiceKey}`, "back")}
+          onOpenChat={openChatForRequest}
         />
       )}
       {screen === "history" && (
@@ -3026,6 +3738,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: theme.bg
   },
+  keyboardAvoiding: {
+    flex: 1
+  },
   pageTransitionWrap: {
     flex: 1
   },
@@ -3035,16 +3750,16 @@ const styles = StyleSheet.create({
     justifyContent: "center"
   },
   loadingText: {
-    fontSize: 18,
-    fontWeight: "700",
+    fontSize: 16,
+    fontWeight: "800",
     color: theme.blueDark
   },
   startScreen: {
     flex: 1,
     alignItems: "center",
-    backgroundColor: theme.bg,
+    backgroundColor: theme.surface,
     paddingHorizontal: 24,
-    paddingBottom: 44
+    paddingBottom: 48
   },
   brandWrap: {
     alignItems: "center"
@@ -3059,10 +3774,10 @@ const styles = StyleSheet.create({
     transform: [{ rotate: "45deg" }]
   },
   brandName: {
-    fontSize: 30,
+    fontSize: 32,
     fontWeight: "800",
     color: theme.text,
-    letterSpacing: 0.6,
+    letterSpacing: 0,
     marginTop: 18
   },
   brandNameCompact: {
@@ -3072,27 +3787,28 @@ const styles = StyleSheet.create({
   brandTag: {
     fontSize: 12,
     color: theme.muted,
-    letterSpacing: 4,
+    letterSpacing: 2,
     textTransform: "lowercase",
     marginTop: 6
   },
   primaryButton: {
     minWidth: 140,
-    height: 46,
-    borderRadius: 14,
+    minHeight: 44,
+    borderRadius: 12,
     backgroundColor: theme.blue,
     alignItems: "center",
     justifyContent: "center",
     shadowColor: "#000",
-    shadowOpacity: 0.18,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 4
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 2,
+    paddingHorizontal: 16
   },
   primaryButtonText: {
     color: "#fff",
-    fontSize: 16,
-    fontWeight: "700"
+    fontSize: 15,
+    fontWeight: "800"
   },
   buttonDisabled: {
     backgroundColor: "#d4d7da",
@@ -3103,23 +3819,41 @@ const styles = StyleSheet.create({
     color: "#f6f6f6"
   },
   buttonPressed: {
+    opacity: 0.88,
+    transform: [{ scale: 0.98 }]
+  },
+  cardPressed: {
     opacity: 0.9,
     transform: [{ scale: 0.99 }]
   },
+  iconCircleButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(255,255,255,0.92)",
+    alignItems: "center",
+    justifyContent: "center",
+    position: "relative",
+    shadowColor: "#000",
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2
+  },
   getStartedButton: {
-    minWidth: 142,
-    height: 34,
-    borderRadius: 18
+    width: "100%",
+    height: 52,
+    borderRadius: 16
   },
   getStartedText: {
-    fontSize: 14
+    fontSize: 16
   },
   authScreen: {
     flexGrow: 1,
     justifyContent: "center",
     alignItems: "center",
-    paddingHorizontal: 18,
-    paddingVertical: 28,
+    paddingHorizontal: 20,
+    paddingVertical: 32,
     gap: 24,
     backgroundColor: theme.bg
   },
@@ -3128,48 +3862,52 @@ const styles = StyleSheet.create({
     backgroundColor: theme.surface,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: "#cfd5db",
+    borderColor: theme.border,
     overflow: "hidden",
     shadowColor: "#000",
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 3
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 2
   },
   authHeader: {
-    backgroundColor: theme.blue,
+    backgroundColor: theme.surface,
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 8
+    paddingTop: 20,
+    paddingBottom: 8
   },
   authHeaderText: {
-    color: "#fff",
+    color: theme.text,
     fontWeight: "800",
     fontSize: 22
   },
   fieldWrap: {
-    paddingHorizontal: 12,
-    paddingTop: 12
+    paddingHorizontal: 18,
+    paddingTop: 14
   },
   fieldLabel: {
-    color: "#3c3c3c",
+    color: theme.muted,
     fontSize: 12,
-    marginBottom: 4
+    marginBottom: 7,
+    fontWeight: "700"
   },
   fieldInput: {
-    height: 40,
+    minHeight: 46,
     borderWidth: 1,
-    borderColor: "#bcc4cb",
-    borderRadius: 4,
-    backgroundColor: "#fff",
-    paddingHorizontal: 10
+    borderColor: theme.border,
+    borderRadius: 12,
+    backgroundColor: "#f9fbfd",
+    paddingHorizontal: 14,
+    color: theme.text,
+    fontSize: 14
   },
   authButton: {
     alignSelf: "center",
-    marginTop: 16,
-    minWidth: 92,
-    height: 34,
-    borderRadius: 10
+    marginTop: 18,
+    width: "88%",
+    height: 48,
+    borderRadius: 14
   },
   authErrorText: {
     color: "#c83434",
@@ -3181,13 +3919,13 @@ const styles = StyleSheet.create({
   authFooter: {
     flexDirection: "row",
     justifyContent: "space-between",
-    paddingHorizontal: 12,
-    paddingTop: 12,
-    paddingBottom: 14,
+    paddingHorizontal: 18,
+    paddingTop: 16,
+    paddingBottom: 20,
     gap: 10
   },
   authFooterText: {
-    fontSize: 10,
+    fontSize: 12,
     color: theme.muted
   },
   authFooterLink: {
@@ -3199,12 +3937,12 @@ const styles = StyleSheet.create({
     backgroundColor: theme.bg
   },
   headerArea: {
-    height: 210,
-    borderBottomLeftRadius: 28,
-    borderBottomRightRadius: 28,
+    height: Math.min(244, Math.max(220, SCREEN_HEIGHT * 0.255)),
+    borderBottomLeftRadius: 26,
+    borderBottomRightRadius: 26,
     overflow: "hidden",
-    paddingHorizontal: 16,
-    paddingTop: 12
+    paddingHorizontal: 20,
+    paddingTop: 16
   },
   heroImage: {
     ...StyleSheet.absoluteFillObject,
@@ -3212,12 +3950,12 @@ const styles = StyleSheet.create({
   },
   headerOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(9,30,54,0.25)"
+    backgroundColor: "rgba(7,35,58,0.34)"
   },
   headerIcons: {
     flexDirection: "row",
     justifyContent: "flex-end",
-    gap: 18
+    gap: 12
   },
   headerBellButton: {
     position: "relative"
@@ -3239,37 +3977,63 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: "800"
   },
+  headerCopy: {
+    marginTop: 26,
+    maxWidth: "82%"
+  },
+  headerEyebrow: {
+    color: "rgba(255,255,255,0.82)",
+    fontSize: 13,
+    fontWeight: "800",
+    marginBottom: 5
+  },
+  headerTitle: {
+    color: "#fff",
+    fontSize: 28,
+    fontWeight: "900",
+    lineHeight: 33
+  },
+  headerSubtitle: {
+    color: "rgba(255,255,255,0.84)",
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 8
+  },
   guidePill: {
-    marginTop: 110,
-    alignSelf: "center",
+    position: "absolute",
+    right: 20,
+    bottom: 18,
+    alignSelf: "flex-end",
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    backgroundColor: "#eef1ff",
+    backgroundColor: "rgba(255,255,255,0.94)",
     paddingHorizontal: 16,
-    height: 36,
-    borderRadius: 18
+    height: 38,
+    borderRadius: 19
   },
   guideText: {
-    color: "#4f4f4f",
-    fontWeight: "600"
+    color: theme.navy,
+    fontWeight: "800"
   },
   dashboardContent: {
-    paddingHorizontal: 14,
-    paddingBottom: 28
+    paddingHorizontal: 18,
+    paddingTop: 16,
+    paddingBottom: 36
   },
   featuredFrame: {
-    marginTop: -18
+    marginTop: 0
   },
   featuredTrack: {
-    gap: 14,
-    paddingHorizontal: 2,
+    gap: 12,
+    paddingHorizontal: 1,
     paddingTop: 12
   },
   featureImage: {
-    width: 250,
-    height: 120,
-    borderRadius: 14
+    width: SCREEN_WIDTH - 58,
+    height: Math.min(156, Math.max(132, SCREEN_WIDTH * 0.38)),
+    borderRadius: 8,
+    backgroundColor: theme.border
   },
   paginationWrap: {
     flexDirection: "row",
@@ -3290,36 +4054,43 @@ const styles = StyleSheet.create({
     backgroundColor: "#3048a0"
   },
   sectionTitle: {
-    fontSize: 13,
-    fontWeight: "700",
+    fontSize: 16,
+    fontWeight: "800",
     color: theme.text,
-    marginTop: 14,
-    marginBottom: 10
+    marginTop: 18,
+    marginBottom: 12
   },
   shortcutsRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    gap: 8
+    gap: 10
   },
   shortcutCard: {
     flex: 1,
     alignItems: "center",
-    backgroundColor: "#e8efff",
-    borderRadius: 16,
-    paddingVertical: 10,
-    paddingHorizontal: 4
+    backgroundColor: theme.surface,
+    borderRadius: 8,
+    paddingVertical: 13,
+    paddingHorizontal: 5,
+    borderWidth: 1,
+    borderColor: theme.border,
+    shadowColor: "#000",
+    shadowOpacity: 0.07,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 2
   },
   shortcutIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: "#fff",
+    width: 42,
+    height: 42,
+    borderRadius: 15,
+    backgroundColor: theme.blueSoft,
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 6
   },
   shortcutLabel: {
-    fontSize: 10,
+    fontSize: 11,
     textAlign: "center",
     fontWeight: "700",
     color: theme.text
@@ -3328,28 +4099,38 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#fff",
-    borderRadius: 12,
-    marginBottom: 12,
-    padding: 10,
+    borderRadius: 8,
+    marginBottom: 10,
+    padding: 15,
     gap: 14,
     shadowColor: "#000",
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 3
+    borderWidth: 1,
+    borderColor: theme.border,
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 1
   },
   serviceIconBox: {
     width: 52,
     height: 52,
-    borderRadius: 10,
-    backgroundColor: theme.blue,
+    borderRadius: 16,
+    backgroundColor: theme.blueSoft,
     alignItems: "center",
     justifyContent: "center"
   },
+  serviceCardBody: {
+    flex: 1
+  },
   serviceCardText: {
-    fontSize: 14,
-    fontWeight: "700",
+    fontSize: 15,
+    fontWeight: "800",
     color: theme.text
+  },
+  serviceCardSub: {
+    marginTop: 3,
+    fontSize: 12,
+    color: theme.muted
   },
   historyTitle: {
     marginTop: 4
@@ -3359,18 +4140,58 @@ const styles = StyleSheet.create({
   },
   historyCard: {
     backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 10,
+    borderRadius: 8,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: theme.border,
     shadowColor: "#000",
     shadowOpacity: 0.08,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 2 },
+    elevation: 1
+  },
+  quickActionGrid: {
+    flexDirection: "row",
+    gap: 12
+  },
+  quickActionCard: {
+    flex: 1,
+    backgroundColor: theme.surface,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: theme.border,
+    padding: 14,
+    minHeight: 124,
+    shadowColor: "#000",
+    shadowOpacity: 0.07,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 5 },
     elevation: 2
+  },
+  quickActionIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 8,
+    backgroundColor: theme.blueSoft,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 12
+  },
+  quickActionTitle: {
+    fontSize: 15,
+    fontWeight: "900",
+    color: theme.text
+  },
+  quickActionBody: {
+    marginTop: 5,
+    fontSize: 12,
+    color: theme.muted,
+    lineHeight: 17
   },
   largeActionButton: {
     width: "100%",
-    borderRadius: 8,
-    height: 48
+    borderRadius: 14,
+    height: 50
   },
   ongoingButtonText: {
     fontSize: 18
@@ -3385,8 +4206,8 @@ const styles = StyleSheet.create({
   modalCard: {
     width: "100%",
     backgroundColor: "#fff",
-    borderRadius: 14,
-    padding: 18,
+    borderRadius: 8,
+    padding: 22,
     alignItems: "center"
   },
   modalText: {
@@ -3397,9 +4218,9 @@ const styles = StyleSheet.create({
   },
   modalButton: {
     width: "100%",
-    height: 40,
-    borderRadius: 8,
-    marginTop: 8
+    height: 46,
+    borderRadius: 14,
+    marginTop: 10
   },
   modalButtonSecondary: {
     backgroundColor: "#2d8fdb"
@@ -3414,29 +4235,31 @@ const styles = StyleSheet.create({
     alignItems: "flex-end"
   },
   menuPanel: {
-    width: 138,
-    backgroundColor: "#3f3b3a",
+    width: 188,
+    backgroundColor: theme.surface,
     height: "100%",
-    paddingTop: 88,
-    paddingHorizontal: 18
+    paddingTop: 86,
+    paddingHorizontal: 18,
+    borderTopLeftRadius: 8,
+    borderBottomLeftRadius: 8
   },
   menuItem: {
-    color: "#fff",
-    fontSize: 10,
+    color: theme.text,
+    fontSize: 15,
     fontWeight: "700",
-    marginBottom: 14
+    marginBottom: 22
   },
   serviceScreen: {
     flex: 1,
-    backgroundColor: "#58748c"
+    backgroundColor: theme.bg
   },
   serviceBgImage: {
     ...StyleSheet.absoluteFillObject,
-    opacity: 0.35
+    opacity: 0
   },
   serviceBgOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(32,63,89,0.42)"
+    backgroundColor: theme.bg
   },
   profileModalBackdrop: {
     flex: 1,
@@ -3446,8 +4269,8 @@ const styles = StyleSheet.create({
   },
   profileModalCard: {
     backgroundColor: "#fff",
-    borderRadius: 10,
-    padding: 14,
+    borderRadius: 8,
+    padding: 18,
     maxHeight: "90%"
   },
   profileCloseButton: {
@@ -3457,55 +4280,57 @@ const styles = StyleSheet.create({
     zIndex: 2
   },
   profileTopIcon: {
-    width: 78,
-    height: 78,
-    borderWidth: 1,
-    borderColor: "#b7b7b7",
+    width: 88,
+    height: 88,
+    borderWidth: 0,
+    borderRadius: 44,
+    backgroundColor: theme.blueSoft,
     alignSelf: "center",
     alignItems: "center",
     justifyContent: "center",
     marginTop: 12
   },
   profileTopIconSmall: {
-    width: 78,
-    height: 78,
-    borderWidth: 1,
-    borderColor: "#b7b7b7",
+    width: 82,
+    height: 82,
+    borderWidth: 0,
+    borderRadius: 41,
+    backgroundColor: theme.blueSoft,
     alignSelf: "center",
     alignItems: "center",
     justifyContent: "center"
   },
   profileName: {
-    fontSize: 14,
-    fontWeight: "700",
+    fontSize: 18,
+    fontWeight: "800",
     color: theme.text,
     textAlign: "center",
     marginTop: 8,
     marginBottom: 6
   },
   profileParagraph: {
-    fontSize: 8,
-    color: "#505050",
-    lineHeight: 11,
-    marginTop: 10
+    fontSize: 13,
+    color: "#4d5b68",
+    lineHeight: 19,
+    marginTop: 12
   },
   profileSectionTitle: {
-    fontSize: 9,
+    fontSize: 13,
     fontWeight: "800",
     color: theme.text,
-    marginTop: 10,
-    marginBottom: 4
+    marginTop: 14,
+    marginBottom: 6
   },
   profileBullet: {
-    fontSize: 8,
-    color: "#505050",
-    lineHeight: 11
+    fontSize: 12,
+    color: "#4d5b68",
+    lineHeight: 18
   },
   reviewCard: {
     borderWidth: 1,
-    borderColor: "#b9b9b9",
-    borderRadius: 8,
-    padding: 8,
+    borderColor: theme.border,
+    borderRadius: 14,
+    padding: 12,
     marginTop: 8
   },
   reviewHeader: {
@@ -3515,29 +4340,30 @@ const styles = StyleSheet.create({
     marginBottom: 6
   },
   reviewName: {
-    fontSize: 8,
+    fontSize: 12,
     fontWeight: "700",
     color: theme.text
   },
   reviewBody: {
-    fontSize: 7,
-    lineHeight: 10,
+    fontSize: 12,
+    lineHeight: 18,
     color: "#5a5a5a"
   },
   proceedButton: {
     marginTop: 12,
     alignSelf: "center",
     minWidth: 110,
-    height: 34,
-    borderRadius: 8
+    height: 44,
+    borderRadius: 12
   },
   confirmModalCard: {
     backgroundColor: "#fff",
-    borderRadius: 10,
-    padding: 14
+    borderRadius: 8,
+    padding: 20,
+    width: "100%"
   },
   confirmQuestion: {
-    fontSize: 9,
+    fontSize: 13,
     color: "#727272",
     textAlign: "center",
     marginTop: 2,
@@ -3549,66 +4375,77 @@ const styles = StyleSheet.create({
     justifyContent: "center"
   },
   confirmButton: {
-    minWidth: 92,
-    height: 28,
-    borderRadius: 7
+    flex: 1,
+    minWidth: 0,
+    height: 44,
+    borderRadius: 14
   },
   confirmButtonText: {
-    fontSize: 10
+    fontSize: 13
   },
   sentModalCard: {
     backgroundColor: "#fff",
-    borderRadius: 10,
-    padding: 16
+    borderRadius: 8,
+    padding: 20,
+    width: "100%"
   },
   requestSentText: {
-    fontSize: 9,
+    fontSize: 14,
     color: "#767676",
     textAlign: "center",
     marginBottom: 12
   },
   sentProceedButton: {
-    minWidth: 110,
-    height: 28,
-    borderRadius: 7,
+    minWidth: 130,
+    height: 44,
+    borderRadius: 14,
     alignSelf: "center"
   },
   serviceScroll: {
-    padding: 12
+    paddingHorizontal: Math.min(20, Math.max(14, SCREEN_WIDTH * 0.045)),
+    paddingTop: 14,
+    paddingBottom: 28
   },
   serviceCardShell: {
-    backgroundColor: "rgba(255,255,255,0.9)",
+    backgroundColor: theme.surface,
     borderRadius: 8,
-    padding: 12,
+    padding: 16,
     borderWidth: 1,
-    borderColor: "#9aa6b1"
+    borderColor: theme.border,
+    shadowColor: "#000",
+    shadowOpacity: 0.06,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 1
   },
   serviceHeaderPill: {
-    backgroundColor: theme.blue,
-    borderRadius: 8,
-    height: 42,
+    backgroundColor: theme.navy,
+    borderRadius: 18,
+    minHeight: 54,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 12
+    gap: 12,
+    paddingHorizontal: 14
   },
   serviceHeaderIconCircle: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 34,
+    height: 34,
+    borderRadius: 12,
     backgroundColor: "#fff",
     alignItems: "center",
     justifyContent: "center"
   },
   serviceHeaderTitle: {
     color: "#fff",
-    fontSize: 13,
-    fontWeight: "700"
+    fontSize: 16,
+    fontWeight: "800",
+    flexShrink: 1
   },
   offeredHeaderBar: {
-    backgroundColor: theme.blue,
-    borderRadius: 8,
-    height: 46,
+    backgroundColor: theme.navy,
+    borderRadius: 18,
+    minHeight: 56,
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 18,
@@ -3624,15 +4461,17 @@ const styles = StyleSheet.create({
   },
   offeredHeaderText: {
     color: "#fff",
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: "800",
     flex: 1
   },
   offeredCard: {
-    backgroundColor: "rgba(255,255,255,0.94)",
+    backgroundColor: theme.surface,
     borderRadius: 8,
     padding: 12,
     marginBottom: 14,
+    borderWidth: 1,
+    borderColor: theme.border,
     shadowColor: "#000",
     shadowOpacity: 0.12,
     shadowRadius: 8,
@@ -3641,61 +4480,76 @@ const styles = StyleSheet.create({
   },
   offeredCardImage: {
     width: "100%",
-    height: 110,
-    borderRadius: 2,
-    marginBottom: 10
+    height: 150,
+    borderRadius: 14,
+    marginBottom: 12
   },
   offeredCardTitle: {
-    fontSize: 12,
-    color: "#333",
-    fontWeight: "700",
-    textAlign: "center"
+    fontSize: 15,
+    color: theme.text,
+    fontWeight: "800",
+    textAlign: "left"
   },
   formBackIcon: {
-    marginTop: 12,
-    marginBottom: 6,
+    marginTop: 6,
+    marginBottom: 12,
     alignSelf: "flex-start"
   },
   requestFieldWrap: {
-    marginBottom: 10
+    marginBottom: 14
   },
   requestFieldLabel: {
-    fontSize: 10,
-    color: "#545454",
-    marginBottom: 4,
-    fontWeight: "700"
+    fontSize: 12,
+    color: theme.muted,
+    marginBottom: 7,
+    fontWeight: "800"
   },
   requiredAsterisk: {
     color: "#d12d2d"
   },
   requestInputWrap: {
-    height: 36,
+    minHeight: 48,
     borderWidth: 1,
-    borderColor: "#9f9f9f",
-    borderRadius: 4,
-    backgroundColor: "#fff",
+    borderColor: theme.border,
+    borderRadius: 14,
+    backgroundColor: "#f9fbfd",
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 10
   },
   requestInput: {
     flex: 1,
-    fontSize: 10,
-    color: theme.text
+    fontSize: 14,
+    color: theme.text,
+    minHeight: 44
+  },
+  pinButton: {
+    minHeight: 34,
+    borderRadius: 11,
+    paddingHorizontal: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: theme.blueSoft
+  },
+  pinButtonText: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: theme.blueDark
   },
   concernInput: {
     minHeight: 140,
     borderWidth: 1,
-    borderColor: "#9f9f9f",
-    borderRadius: 4,
-    backgroundColor: "#fff",
-    paddingHorizontal: 10,
-    paddingVertical: 10
+    borderColor: theme.border,
+    borderRadius: 14,
+    backgroundColor: "#f9fbfd",
+    paddingHorizontal: 12,
+    paddingVertical: 12
   },
   submitButton: {
     width: "100%",
-    borderRadius: 6,
-    marginTop: 8
+    borderRadius: 15,
+    marginTop: 8,
+    height: 50
   },
   formErrorText: {
     color: "#c83434",
@@ -3704,57 +4558,99 @@ const styles = StyleSheet.create({
     marginTop: 8
   },
   providerScroll: {
-    padding: 12
+    paddingHorizontal: Math.min(20, Math.max(14, SCREEN_WIDTH * 0.045)),
+    paddingTop: 14,
+    paddingBottom: 28
   },
   providerShell: {
-    backgroundColor: "rgba(255,255,255,0.92)",
+    backgroundColor: theme.surface,
     borderRadius: 8,
-    padding: 12,
+    padding: 16,
     borderWidth: 1,
-    borderColor: "#8e98a1"
+    borderColor: theme.border
   },
   providerTitleBar: {
-    backgroundColor: theme.blue,
-    borderRadius: 6,
+    backgroundColor: theme.navy,
+    borderRadius: 16,
     alignItems: "center",
     justifyContent: "center",
-    height: 32
+    height: 48
   },
   providerTitleBarText: {
     color: "#fff",
-    fontSize: 12,
-    fontWeight: "700"
+    fontSize: 16,
+    fontWeight: "800"
   },
   providerIntro: {
-    color: "#717171",
-    fontSize: 10,
-    lineHeight: 14,
-    marginTop: 10,
-    marginBottom: 10
+    color: theme.muted,
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 12,
+    marginBottom: 14
   },
   providerEmptyText: {
-    fontSize: 11,
-    color: "#666",
-    lineHeight: 18,
+    fontSize: 13,
+    color: theme.muted,
+    lineHeight: 19,
     marginBottom: 12,
+    textAlign: "center"
+  },
+  emptyStateCard: {
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#f8fbfe",
+    borderWidth: 1,
+    borderColor: theme.border,
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 18,
+    marginTop: 4
+  },
+  emptyStateIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: theme.blueSoft,
+    marginBottom: 10
+  },
+  emptyStateTitle: {
+    fontSize: 14,
+    fontWeight: "900",
+    color: theme.text,
+    textAlign: "center"
+  },
+  emptyStateBody: {
+    marginTop: 5,
+    fontSize: 12,
+    color: theme.muted,
+    lineHeight: 17,
     textAlign: "center"
   },
   providerRow: {
     borderWidth: 1,
-    borderColor: theme.cardBorder,
+    borderColor: theme.border,
     backgroundColor: "#fff",
-    padding: 8,
-    marginBottom: 10
+    padding: 14,
+    marginBottom: 12,
+    borderRadius: 8,
+    shadowColor: "#000",
+    shadowOpacity: 0.05,
+    shadowRadius: 9,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 1
   },
   providerIdentity: {
     flexDirection: "row",
     alignItems: "center"
   },
   providerAvatar: {
-    width: 44,
-    height: 44,
-    borderWidth: 1,
-    borderColor: "#a4a4a4",
+    width: 52,
+    height: 52,
+    borderRadius: 18,
+    backgroundColor: theme.blueSoft,
+    borderWidth: 0,
     alignItems: "center",
     justifyContent: "center",
     marginRight: 8
@@ -3763,8 +4659,8 @@ const styles = StyleSheet.create({
     flex: 1
   },
   providerName: {
-    fontSize: 12,
-    fontWeight: "700",
+    fontSize: 15,
+    fontWeight: "800",
     color: theme.text,
     marginBottom: 3
   },
@@ -3775,27 +4671,29 @@ const styles = StyleSheet.create({
   providerActions: {
     flexDirection: "row",
     gap: 8,
-    marginTop: 8
+    marginTop: 12
   },
   profileButton: {
     flex: 1,
     minWidth: 0,
-    height: 26,
-    borderRadius: 5
+    height: 44,
+    borderRadius: 13
   },
   sendButton: {
     flex: 1,
     minWidth: 0,
-    height: 26,
-    borderRadius: 5
+    height: 44,
+    borderRadius: 13
   },
   providerButtonText: {
-    fontSize: 9
+    fontSize: 12
   },
   cancelButton: {
     width: "100%",
-    borderRadius: 6,
-    marginTop: 6
+    borderRadius: 14,
+    marginTop: 8,
+    height: 48,
+    backgroundColor: theme.navy
   },
   providerBackButton: {
     position: "absolute",
@@ -3803,9 +4701,9 @@ const styles = StyleSheet.create({
     left: 12
   },
   statusHeaderPill: {
-    backgroundColor: theme.blue,
-    borderRadius: 8,
-    height: 42,
+    backgroundColor: theme.navy,
+    borderRadius: 18,
+    minHeight: 54,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -3813,29 +4711,30 @@ const styles = StyleSheet.create({
     marginBottom: 12
   },
   statusCard: {
-    backgroundColor: "rgba(255,255,255,0.93)",
+    backgroundColor: theme.surface,
     borderRadius: 8,
-    padding: 12,
+    padding: 16,
     borderWidth: 1,
-    borderColor: "#9aa6b1",
-    minHeight: 560
+    borderColor: theme.border,
+    minHeight: 540
   },
   statusBackButton: {
     alignSelf: "flex-start",
     marginBottom: 10
   },
   statusAvatarBox: {
-    width: 92,
-    height: 92,
-    borderWidth: 1,
-    borderColor: "#b7b7b7",
+    width: 96,
+    height: 96,
+    borderRadius: 34,
+    backgroundColor: theme.blueSoft,
+    borderWidth: 0,
     alignSelf: "center",
     justifyContent: "center",
     alignItems: "center"
   },
   statusName: {
-    fontSize: 14,
-    fontWeight: "700",
+    fontSize: 18,
+    fontWeight: "800",
     color: theme.text,
     textAlign: "center",
     marginTop: 10,
@@ -3843,39 +4742,46 @@ const styles = StyleSheet.create({
   },
   statusActionRow: {
     flexDirection: "row",
-    gap: 8,
-    marginTop: 10,
-    marginBottom: 14
+    gap: 10,
+    marginTop: 14,
+    marginBottom: 18
   },
   statusMiniButton: {
     flex: 1,
     minWidth: 0,
-    height: 24,
-    borderRadius: 5
+    height: 44,
+    borderRadius: 13
   },
   statusMiniText: {
-    fontSize: 8
+    fontSize: 12
+  },
+  chatOpenButton: {
+    width: "100%",
+    height: 44,
+    borderRadius: 14,
+    marginBottom: 16,
+    backgroundColor: theme.navy
   },
   timelineWrap: {
     marginTop: 4
   },
   timelineRow: {
     flexDirection: "row",
-    minHeight: 58
+    minHeight: 64
   },
   timelineLeft: {
-    width: 16,
+    width: 26,
     alignItems: "center"
   },
   timelineDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: "#b8b8b8",
+    width: 13,
+    height: 13,
+    borderRadius: 7,
+    backgroundColor: "#cad5df",
     marginTop: 2
   },
   timelineDotActive: {
-    backgroundColor: "#33cb32"
+    backgroundColor: theme.success
   },
   timelineDotCompleted: {
     backgroundColor: "#b8b8b8"
@@ -3891,20 +4797,20 @@ const styles = StyleSheet.create({
     paddingBottom: 8
   },
   timelineLabel: {
-    fontSize: 9,
-    color: "#8b8b8b",
-    fontWeight: "700"
+    fontSize: 14,
+    color: "#758391",
+    fontWeight: "800"
   },
   timelineLabelActive: {
-    color: "#37c637"
+    color: theme.success
   },
   timelineLabelCompleted: {
     color: "#808080"
   },
   timelineMeta: {
-    fontSize: 7,
-    color: "#8a8a8a",
-    lineHeight: 9
+    fontSize: 11,
+    color: theme.muted,
+    lineHeight: 16
   },
   proofLink: {
     fontSize: 8,
@@ -3916,31 +4822,31 @@ const styles = StyleSheet.create({
   leaveReviewButton: {
     width: "72%",
     alignSelf: "center",
-    height: 28,
-    borderRadius: 6,
-    marginTop: 6
+    height: 44,
+    borderRadius: 14,
+    marginTop: 10
   },
   leaveReviewText: {
-    fontSize: 10
+    fontSize: 13
   },
   proofTitleButton: {
     alignSelf: "center",
     minWidth: 110,
-    height: 26,
-    borderRadius: 6,
+    height: 44,
+    borderRadius: 12,
     marginTop: 10,
     marginBottom: 16
   },
   proofViewerButton: {
     alignSelf: "center",
     minWidth: 150,
-    height: 30,
-    borderRadius: 6,
+    height: 44,
+    borderRadius: 14,
     marginTop: 12
   },
   proofViewerModalCard: {
     backgroundColor: "#fff",
-    borderRadius: 12,
+    borderRadius: 8,
     padding: 16,
     width: "100%",
     maxWidth: 360,
@@ -3982,29 +4888,31 @@ const styles = StyleSheet.create({
   statusDoneButton: {
     alignSelf: "center",
     width: "72%",
-    height: 30,
-    borderRadius: 6,
+    height: 44,
+    borderRadius: 14,
     marginTop: 10
   },
   historyEntryCard: {
-    backgroundColor: "rgba(255,255,255,0.93)",
+    backgroundColor: theme.surface,
     borderRadius: 8,
-    padding: 12,
+    padding: 16,
     borderWidth: 1,
-    borderColor: "#9aa6b1",
+    borderColor: theme.border,
     marginBottom: 18
   },
   historyEntryTitle: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: "800",
     color: theme.blue,
-    textAlign: "center",
+    textAlign: "left",
     marginBottom: 10
   },
   historyEntryInner: {
     borderWidth: 1,
-    borderColor: "#c8c8c8",
-    padding: 10
+    borderColor: theme.border,
+    padding: 14,
+    borderRadius: 8,
+    backgroundColor: "#f9fbfd"
   },
   historyEntryTop: {
     flexDirection: "row",
@@ -4013,16 +4921,18 @@ const styles = StyleSheet.create({
   providerAvatarLarge: {
     width: 64,
     height: 64,
-    borderWidth: 1,
-    borderColor: "#a9a9a9",
+    borderWidth: 0,
+    borderRadius: 22,
+    backgroundColor: theme.blueSoft,
     justifyContent: "center",
     alignItems: "center"
   },
   providerAvatarXLarge: {
     width: 96,
     height: 96,
-    borderWidth: 1,
-    borderColor: "#a9a9a9",
+    borderWidth: 0,
+    borderRadius: 34,
+    backgroundColor: theme.blueSoft,
     justifyContent: "center",
     alignItems: "center",
     alignSelf: "center",
@@ -4032,28 +4942,28 @@ const styles = StyleSheet.create({
     flex: 1
   },
   historyProviderName: {
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: "800",
     color: "#242424"
   },
   historyProviderSmall: {
-    fontSize: 7,
-    color: "#868686",
-    lineHeight: 9
+    fontSize: 11,
+    color: theme.muted,
+    lineHeight: 16
   },
   historyComplete: {
     color: "#30c033",
     fontWeight: "700"
   },
   historyEntryButton: {
-    height: 30,
-    borderRadius: 6,
+    height: 44,
+    borderRadius: 14,
     alignSelf: "center",
     marginTop: 12,
     minWidth: 120
   },
   historyEntryButtonText: {
-    fontSize: 10
+    fontSize: 12
   },
   historyProofImage: {
     width: "100%",
@@ -4062,11 +4972,11 @@ const styles = StyleSheet.create({
     marginTop: 12
   },
   ongoingCard: {
-    backgroundColor: "rgba(255,255,255,0.93)",
+    backgroundColor: theme.surface,
     borderRadius: 8,
-    padding: 12,
+    padding: 16,
     borderWidth: 1,
-    borderColor: "#9aa6b1"
+    borderColor: theme.border
   },
   ongoingCardTitle: {
     fontSize: 22,
@@ -4077,8 +4987,10 @@ const styles = StyleSheet.create({
   },
   ongoingInner: {
     borderWidth: 1,
-    borderColor: "#c8c8c8",
-    padding: 12
+    borderColor: theme.border,
+    padding: 16,
+    borderRadius: 8,
+    backgroundColor: "#f9fbfd"
   },
   ongoingName: {
     fontSize: 14,
@@ -4088,20 +5000,20 @@ const styles = StyleSheet.create({
     marginBottom: 10
   },
   ongoingStatusButton: {
-    height: 30,
-    borderRadius: 6,
+    height: 44,
+    borderRadius: 14,
     alignSelf: "center",
     minWidth: 145
   },
   reviewFormCard: {
-    backgroundColor: "rgba(255,255,255,0.95)",
+    backgroundColor: theme.surface,
     borderRadius: 8,
-    padding: 12,
+    padding: 16,
     borderWidth: 1,
-    borderColor: "#9aa6b1"
+    borderColor: theme.border
   },
   reviewFormTitle: {
-    fontSize: 18,
+    fontSize: 20,
     color: theme.blue,
     fontWeight: "800",
     textAlign: "center",
@@ -4113,10 +5025,11 @@ const styles = StyleSheet.create({
     marginBottom: 10
   },
   reviewLabel: {
-    fontSize: 9,
-    color: "#4e4e4e",
+    fontSize: 13,
+    color: theme.muted,
     marginTop: 10,
-    marginBottom: 6
+    marginBottom: 8,
+    fontWeight: "800"
   },
   reviewCheckboxRow: {
     flexDirection: "row",
@@ -4125,31 +5038,31 @@ const styles = StyleSheet.create({
     marginTop: 10
   },
   reviewCheckboxText: {
-    fontSize: 8,
-    color: "#5c5c5c"
+    fontSize: 13,
+    color: theme.muted
   },
   reviewInput: {
     minHeight: 200,
     borderWidth: 1,
-    borderColor: "#9f9f9f",
-    borderRadius: 4,
-    backgroundColor: "#fff",
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    fontSize: 10,
+    borderColor: theme.border,
+    borderRadius: 14,
+    backgroundColor: "#f9fbfd",
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: 14,
     color: theme.text
   },
   reviewSubmitButton: {
     alignSelf: "center",
     minWidth: 118,
-    height: 30,
-    borderRadius: 6,
+    height: 44,
+    borderRadius: 14,
     marginTop: 16
   },
   reviewPostedCard: {
     backgroundColor: "#fff",
-    borderRadius: 10,
-    padding: 16,
+    borderRadius: 8,
+    padding: 20,
     minHeight: 180,
     justifyContent: "center"
   },
@@ -4163,12 +5076,12 @@ const styles = StyleSheet.create({
   reviewPostedButton: {
     alignSelf: "center",
     minWidth: 120,
-    height: 30,
-    borderRadius: 6
+    height: 44,
+    borderRadius: 14
   },
   completionModalCard: {
     backgroundColor: "#fff",
-    borderRadius: 10,
+    borderRadius: 8,
     padding: 16,
     width: "100%",
     maxWidth: 340,
@@ -4181,12 +5094,12 @@ const styles = StyleSheet.create({
   proofGalleryImage: {
     width: 130,
     height: 130,
-    borderRadius: 10
+    borderRadius: 8
   },
   completionPreviewImage: {
     width: 110,
     height: 110,
-    borderRadius: 10
+    borderRadius: 8
   },
   completionErrorText: {
     fontSize: 11,
@@ -4214,11 +5127,10 @@ const styles = StyleSheet.create({
     width: 120,
     height: 120,
     borderRadius: 60,
-    backgroundColor: "#fff",
+    backgroundColor: theme.blueSoft,
     justifyContent: "center",
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#b7b7b7"
+    borderWidth: 0
   },
   rescheduleTimeWrap: {
     marginTop: 10
@@ -4230,29 +5142,40 @@ const styles = StyleSheet.create({
   },
   equalActionButton: {
     width: "100%",
-    height: 34,
-    borderRadius: 8
+    height: 44,
+    borderRadius: 14
   },
   equalActionButtonSecondary: {
     backgroundColor: theme.blueDark
   },
   myReviewCard: {
-    backgroundColor: "rgba(255,255,255,0.95)",
+    backgroundColor: theme.surface,
     borderRadius: 8,
-    padding: 12,
+    padding: 16,
     borderWidth: 1,
-    borderColor: "#9aa6b1"
+    borderColor: theme.border
   },
   workerHero: {
-    backgroundColor: "rgba(255,255,255,0.95)",
-    borderRadius: 10,
+    backgroundColor: theme.surface,
+    borderRadius: 8,
     padding: 18,
     marginBottom: 14,
     borderWidth: 1,
-    borderColor: "#9aa6b1"
+    borderColor: theme.border,
+    shadowColor: "#000",
+    shadowOpacity: 0.08,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 2
+  },
+  workerHeroTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 14
   },
   workerHeroEyebrow: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: "700",
     color: theme.blueDark,
     marginBottom: 6
@@ -4260,12 +5183,50 @@ const styles = StyleSheet.create({
   workerHeroTitle: {
     fontSize: 24,
     fontWeight: "800",
-    color: theme.blue
+    color: theme.text,
+    flexShrink: 1
   },
   workerHeroSub: {
-    marginTop: 8,
+    marginTop: 4,
+    fontSize: 14,
+    color: "#4d5b68",
+    lineHeight: 20
+  },
+  workerHeroAvatar: {
+    width: 64,
+    height: 64,
+    borderRadius: 8,
+    backgroundColor: theme.blueSoft,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  workerBioText: {
+    marginTop: 14,
+    fontSize: 13,
+    color: "#4d5b68",
+    lineHeight: 19
+  },
+  liveStatusPill: {
+    marginTop: 14,
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#eaf8f0",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7
+  },
+  liveStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: theme.success
+  },
+  liveStatusText: {
     fontSize: 12,
-    color: "#5a5a5a"
+    fontWeight: "800",
+    color: "#177344"
   },
   workerStatsRow: {
     flexDirection: "row",
@@ -4274,12 +5235,17 @@ const styles = StyleSheet.create({
   },
   workerStatCard: {
     flex: 1,
-    backgroundColor: "rgba(255,255,255,0.95)",
-    borderRadius: 10,
+    backgroundColor: theme.surface,
+    borderRadius: 8,
     paddingVertical: 18,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#9aa6b1"
+    borderColor: theme.border,
+    shadowColor: "#000",
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 1
   },
   workerStatNumber: {
     fontSize: 24,
@@ -4292,12 +5258,23 @@ const styles = StyleSheet.create({
     marginTop: 4
   },
   workerPanel: {
-    backgroundColor: "rgba(255,255,255,0.95)",
-    borderRadius: 10,
+    backgroundColor: theme.surface,
+    borderRadius: 8,
     padding: 16,
     borderWidth: 1,
-    borderColor: "#9aa6b1",
-    marginBottom: 14
+    borderColor: theme.border,
+    marginBottom: 14,
+    shadowColor: "#000",
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 1
+  },
+  panelHeadingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12
   },
   workerPanelTitle: {
     fontSize: 18,
@@ -4306,17 +5283,17 @@ const styles = StyleSheet.create({
     marginBottom: 10
   },
   workerPanelText: {
-    fontSize: 12,
-    color: "#575757",
-    lineHeight: 18,
+    fontSize: 14,
+    color: "#4d5b68",
+    lineHeight: 20,
     marginBottom: 12
   },
   guideCard: {
-    backgroundColor: "rgba(255,255,255,0.95)",
-    borderRadius: 10,
+    backgroundColor: theme.surface,
+    borderRadius: 8,
     padding: 16,
     borderWidth: 1,
-    borderColor: "#9aa6b1",
+    borderColor: theme.border,
     marginBottom: 14
   },
   guideCardTitle: {
@@ -4326,30 +5303,280 @@ const styles = StyleSheet.create({
     marginBottom: 10
   },
   guideCardItem: {
-    fontSize: 12,
+    fontSize: 14,
     color: "#4f4f4f",
     lineHeight: 20,
     marginBottom: 8
   },
+  chatInboxHeader: {
+    backgroundColor: theme.surface,
+    borderRadius: 8,
+    padding: 18,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: theme.border
+  },
+  chatInboxTitle: {
+    fontSize: 26,
+    fontWeight: "900",
+    color: theme.text
+  },
+  chatInboxSub: {
+    marginTop: 6,
+    fontSize: 13,
+    color: theme.muted,
+    lineHeight: 19
+  },
+  chatThreadCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: theme.surface,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: theme.border,
+    padding: 14,
+    marginBottom: 10,
+    shadowColor: "#000",
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 1
+  },
+  chatThreadAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 8,
+    backgroundColor: theme.blueSoft,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12
+  },
+  chatThreadBody: {
+    flex: 1
+  },
+  chatThreadTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10
+  },
+  chatThreadName: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: "900",
+    color: theme.text
+  },
+  chatThreadTime: {
+    fontSize: 10,
+    color: theme.muted
+  },
+  chatThreadPreview: {
+    marginTop: 4,
+    fontSize: 13,
+    color: theme.muted
+  },
+  chatUnreadBadge: {
+    minWidth: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: theme.blue,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 6,
+    marginLeft: 8
+  },
+  chatUnreadText: {
+    color: "#fff",
+    fontSize: 11,
+    fontWeight: "900"
+  },
+  chatScreen: {
+    flex: 1,
+    backgroundColor: "#eef4f8"
+  },
+  chatHeader: {
+    minHeight: 74,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: theme.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.border,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10
+  },
+  chatBackButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  chatHeaderAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 8,
+    backgroundColor: theme.blueSoft,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  chatHeaderTextWrap: {
+    flex: 1
+  },
+  chatHeaderName: {
+    fontSize: 16,
+    fontWeight: "900",
+    color: theme.text
+  },
+  chatHeaderSub: {
+    marginTop: 2,
+    fontSize: 12,
+    color: theme.muted
+  },
+  chatMessagesContent: {
+    flexGrow: 1,
+    paddingHorizontal: 14,
+    paddingTop: 16,
+    paddingBottom: 20
+  },
+  chatMessageRow: {
+    width: "100%",
+    marginBottom: 10
+  },
+  chatMessageRowMine: {
+    alignItems: "flex-end"
+  },
+  chatMessageRowOther: {
+    alignItems: "flex-start"
+  },
+  chatBubble: {
+    maxWidth: "82%",
+    borderRadius: 18,
+    paddingHorizontal: 13,
+    paddingVertical: 10
+  },
+  chatBubbleMine: {
+    backgroundColor: theme.blue,
+    borderBottomRightRadius: 6
+  },
+  chatBubbleOther: {
+    backgroundColor: theme.surface,
+    borderBottomLeftRadius: 6,
+    borderWidth: 1,
+    borderColor: theme.border
+  },
+  chatBubbleText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: theme.text
+  },
+  chatBubbleTextMine: {
+    color: "#fff"
+  },
+  chatImage: {
+    width: Math.min(220, SCREEN_WIDTH * 0.58),
+    height: Math.min(220, SCREEN_WIDTH * 0.58),
+    borderRadius: 12,
+    marginBottom: 8,
+    backgroundColor: theme.border
+  },
+  chatMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: 7,
+    marginTop: 5
+  },
+  chatTimeText: {
+    fontSize: 10,
+    color: theme.muted
+  },
+  chatTimeTextMine: {
+    color: "rgba(255,255,255,0.78)"
+  },
+  chatStatusText: {
+    fontSize: 10,
+    color: "rgba(255,255,255,0.88)",
+    fontWeight: "800"
+  },
+  typingBubble: {
+    alignSelf: "flex-start",
+    backgroundColor: theme.surface,
+    borderRadius: 16,
+    borderBottomLeftRadius: 6,
+    borderWidth: 1,
+    borderColor: theme.border,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    marginTop: 2
+  },
+  typingText: {
+    fontSize: 12,
+    color: theme.muted,
+    fontWeight: "700"
+  },
+  chatComposerWrap: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 9,
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 12,
+    backgroundColor: theme.surface,
+    borderTopWidth: 1,
+    borderTopColor: theme.border
+  },
+  chatImageButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: theme.blueSoft,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  chatInput: {
+    flex: 1,
+    maxHeight: 110,
+    minHeight: 44,
+    borderRadius: 22,
+    backgroundColor: "#f5f8fb",
+    borderWidth: 1,
+    borderColor: theme.border,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: theme.text
+  },
+  chatSendButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: theme.blue,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  chatSendButtonDisabled: {
+    backgroundColor: "#a9c7dd"
+  },
   workerActionButton: {
     width: "100%",
-    height: 34,
-    borderRadius: 8,
+    height: 46,
+    borderRadius: 14,
     marginTop: 6
   },
   workerSecondaryButton: {
     width: "100%",
-    height: 34,
-    borderRadius: 8,
+    height: 46,
+    borderRadius: 14,
     marginTop: 8,
     backgroundColor: theme.blueDark
   },
   workerRequestCard: {
-    backgroundColor: "rgba(255,255,255,0.95)",
-    borderRadius: 10,
+    backgroundColor: "#f9fbfd",
+    borderRadius: 8,
     padding: 14,
     borderWidth: 1,
-    borderColor: "#9aa6b1",
+    borderColor: theme.border,
     marginBottom: 12
   },
   workerRequestTop: {
@@ -4359,7 +5586,7 @@ const styles = StyleSheet.create({
     marginBottom: 8
   },
   workerRequestName: {
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: "800",
     color: "#202020"
   },
@@ -4372,20 +5599,32 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 99
   },
+  countBadge: {
+    minWidth: 30,
+    textAlign: "center",
+    overflow: "hidden",
+    fontSize: 12,
+    fontWeight: "900",
+    color: theme.blueDark,
+    backgroundColor: theme.blueSoft,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 8
+  },
   workerRequestText: {
-    fontSize: 11,
-    color: "#5b5b5b",
-    lineHeight: 16
+    fontSize: 13,
+    color: "#4d5b68",
+    lineHeight: 19
   },
   workerDetailLabel: {
-    fontSize: 10,
+    fontSize: 12,
     fontWeight: "800",
     color: theme.blueDark,
     marginTop: 10,
     marginBottom: 4
   },
   workerDetailValue: {
-    fontSize: 12,
+    fontSize: 14,
     color: "#3d3d3d",
     lineHeight: 18
   },
@@ -4396,11 +5635,11 @@ const styles = StyleSheet.create({
     marginTop: 12
   },
   notificationCard: {
-    backgroundColor: "rgba(255,255,255,0.95)",
-    borderRadius: 10,
+    backgroundColor: theme.surface,
+    borderRadius: 8,
     padding: 14,
     borderWidth: 1,
-    borderColor: "#c7d4df",
+    borderColor: theme.border,
     marginBottom: 12
   },
   notificationCardUnread: {
@@ -4415,7 +5654,7 @@ const styles = StyleSheet.create({
   },
   notificationTitle: {
     flex: 1,
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: "800",
     color: theme.blueDark,
     paddingRight: 8
@@ -4427,7 +5666,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#f24444"
   },
   notificationBody: {
-    fontSize: 12,
+    fontSize: 13,
     color: "#525252",
     lineHeight: 18
   },

@@ -11,3 +11,5 @@ build-debug.log
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+.npm-cache/
+releases/
