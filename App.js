@@ -144,7 +144,7 @@ const formFields = [
 ];
 
 const providerBio =
-  "a reliable and experienced plumber with a strong background in residential and commercial plumbing systems. He is known for delivering high-quality workmanship, ensuring that all installations, repairs, and maintenance tasks are completed efficiently and safely.";
+  "No Bio";
 
 const providerSkills = [
   "Pipe installation and repair",
@@ -716,7 +716,7 @@ function ServiceFormScreen({ service, onBack, onSubmit, values, onChangeText, er
   );
 }
 
-function StarRating({ size = 16, filled = 3 }) {
+function StarRating({ size = 16, filled = 0 }) {
   return (
     <View style={styles.starRow}>
       {[0, 1, 2, 3, 4].map((item) => (
@@ -743,11 +743,19 @@ function ProviderCard({ provider, onViewProfile, onSendRequest }) {
     <View style={styles.providerRow}>
       <View style={styles.providerIdentity}>
         <View style={styles.providerAvatar}>
-          <Ionicons name="person-outline" size={34} color="#2e2e2e" />
+          {provider.photoURL ? (
+            <Image 
+              source={{ uri: provider.photoURL }} 
+              style={{ width: 52, height: 52, borderRadius: 18 }} 
+            />
+          ) : (
+            <Ionicons name="person-outline" size={34} color="#2e2e2e" />
+          )}
         </View>
         <View style={styles.providerDetails}>
           <Text style={styles.providerName}>{provider.name}</Text>
-          <StarRating />
+          {/* Here is the updated real average rating fix! */}
+          <StarRating filled={Math.round(provider.averageRating || 0)} />
         </View>
       </View>
       <View style={styles.providerActions}>
@@ -960,7 +968,70 @@ function CompletionProofModal({ visible, photos, errorMessage, onPickPhotos, onR
     </Modal>
   );
 }
+function PaymentCheckoutModal({ visible, request, onClose, onPay, processing, success }) {
+  const [selectedMethod, setSelectedMethod] = useState("online");
+  const mockPrice = request?.serviceKey === "solar" ? "15,000.00" : "1,500.00";
 
+  return (
+    <Modal transparent visible={visible} animationType="slide">
+      <View style={styles.paymentBackdrop}>
+        <View style={styles.paymentSheet}>
+          {success ? (
+            <View style={styles.paymentSuccessContent}>
+              <Ionicons name="checkmark-circle" size={72} color={theme.success} />
+              <Text style={styles.paymentSuccessTitle}>{selectedMethod === "cash" ? "Cash Selected" : "Payment Successful!"}</Text>
+              <Text style={styles.paymentSuccessText}>
+                {selectedMethod === "cash" 
+                  ? "Please hand the cash to your worker. They will confirm receipt on their app." 
+                  : `₱${mockPrice} has been sent to ${request?.providerName}.`}
+              </Text>
+            </View>
+          ) : (
+            <>
+              <View style={styles.paymentHeaderRow}>
+                <Text style={styles.paymentTitle}>Checkout</Text>
+                <Pressable onPress={onClose} disabled={processing}>
+                  <Ionicons name="close-circle" size={28} color="#999" />
+                </Pressable>
+              </View>
+
+              <View style={styles.paymentSummaryCard}>
+                <Text style={styles.paymentSummaryLabel}>Total Amount Due</Text>
+                <Text style={styles.paymentSummaryAmount}>₱{mockPrice}</Text>
+                <Text style={styles.paymentSummaryDetail}>{request?.serviceLabel} by {request?.providerName}</Text>
+              </View>
+
+              <Text style={styles.paymentMethodLabel}>Select Payment Method</Text>
+
+              <Pressable style={styles.paymentMethodCard} onPress={() => setSelectedMethod("online")}>
+                <View style={[styles.paymentMethodIconBox, { backgroundColor: '#0054E3' }]}>
+                  <Ionicons name="wallet" size={20} color="#fff" />
+                </View>
+                <Text style={styles.paymentMethodText}>GCash / Online</Text>
+                <Ionicons name={selectedMethod === "online" ? "radio-button-on" : "radio-button-off"} size={20} color={selectedMethod === "online" ? theme.blue : "#ccc"} />
+              </Pressable>
+
+              <Pressable style={styles.paymentMethodCard} onPress={() => setSelectedMethod("cash")}>
+                <View style={[styles.paymentMethodIconBox, { backgroundColor: '#21a85b' }]}>
+                  <Ionicons name="cash" size={20} color="#fff" />
+                </View>
+                <Text style={styles.paymentMethodText}>Cash on Hand</Text>
+                <Ionicons name={selectedMethod === "cash" ? "radio-button-on" : "radio-button-off"} size={20} color={selectedMethod === "cash" ? theme.blue : "#ccc"} />
+              </Pressable>
+
+              <PrimaryButton 
+                title={processing ? "Processing..." : selectedMethod === "cash" ? "Pay with Cash" : `Pay ₱${mockPrice} Online`} 
+                onPress={() => onPay(selectedMethod)} 
+                style={styles.paymentConfirmButton} 
+                disabled={processing}
+              />
+            </>
+          )}
+        </View>
+      </View>
+    </Modal>
+  );
+}
 function ProviderListScreen({
   service,
   providers,
@@ -1054,7 +1125,8 @@ function RequestStatusScreen({
   onReschedule,
   onCancel,
   onDone,
-  onOpenChat
+  onOpenChat,
+  onOpenPayment
 }) {
   const currentIndex = statusSteps.findIndex((step) => step.key === activeStep);
   const disableCancel = ["completed", "cancelled", "on-the-way", "started"].includes(activeStep);
@@ -1164,6 +1236,21 @@ function RequestStatusScreen({
                   />
                 ))}
               </View>
+
+              {/* NEW PAYMENT LOGIC FOR 'STARTED' STEP */}
+              {activeStep === "started" ? (
+                <View style={{ marginTop: 16 }}>
+                  {request?.paymentStatus === "paid" ? (
+                    <Text style={{ textAlign: "center", color: theme.success, fontWeight: "800", marginBottom: 12 }}>Payment Verified! Worker is finishing up.</Text>
+                  ) : request?.paymentMethod === "cash" ? (
+                    <Text style={{ textAlign: "center", color: "#e68a00", fontWeight: "800", marginBottom: 12 }}>Waiting for worker to confirm cash receipt...</Text>
+                  ) : (
+                    <PrimaryButton title="PAY TO CONTINUE" onPress={() => onOpenPayment?.()} style={[styles.leaveReviewButton, { backgroundColor: theme.success }]} textStyle={styles.leaveReviewText} />
+                  )}
+                </View>
+              ) : null}
+
+              {/* REVIEW BUTTON FOR 'COMPLETED' STEP */}
               {activeStep === "completed" ? (
                 <>
                   <ProofPhotoViewerButton photos={request?.proofPhotos || []} buttonLabel="Pictures Proof" title="Proof of Service" />
@@ -1237,7 +1324,7 @@ function HistoryEntry({ title, buttonTitle, onPress, request, isWorkerHistory = 
   );
 }
 
-function HistoryScreen({ onBack, completedRequest, pendingReviewRequest, onViewMyReview, onLeaveReview }) {
+function HistoryScreen({ onBack, completedRequest, pendingReviewRequest, onViewMyReview, onLeaveReview, onOpenPayment }) {
   return (
     <View style={styles.serviceScreen}>
       <Image source={{ uri: featuredImages.formBg }} style={styles.serviceBgImage} />
@@ -1247,7 +1334,17 @@ function HistoryScreen({ onBack, completedRequest, pendingReviewRequest, onViewM
           <Ionicons name="arrow-back-circle-outline" size={28} color="#1f1f1f" />
         </Pressable>
         {completedRequest ? <HistoryEntry title="History" buttonTitle="View my Review" onPress={onViewMyReview} request={completedRequest} /> : null}
-        {pendingReviewRequest ? <HistoryEntry title="Pending Review" buttonTitle="Leave a Review" onPress={onLeaveReview} request={pendingReviewRequest} /> : null}
+        
+        {/* Updated logic: Check if paid. If not, show the Pay button instead! */}
+        {pendingReviewRequest ? (
+          <HistoryEntry 
+            title="Pending Review" 
+            buttonTitle={pendingReviewRequest.paymentStatus === "paid" ? "Leave a Review" : "Pay to Unlock Review"} 
+            onPress={pendingReviewRequest.paymentStatus === "paid" ? onLeaveReview : onOpenPayment} 
+            request={pendingReviewRequest} 
+          />
+        ) : null}
+
         {!completedRequest && !pendingReviewRequest ? <Text style={styles.providerEmptyText}>Empty history.</Text> : null}
       </ScrollView>
     </View>
@@ -1905,7 +2002,7 @@ function ProviderHistoryScreen({ requests, loading, onBack, onOpenRequest }) {
   );
 }
 
-function ProviderRequestDetailScreen({ request, onBack, onUpdateStatus, onCancelRequest, onOpenChat }) {
+function ProviderRequestDetailScreen({ request, onBack, onUpdateStatus, onCancelRequest, onOpenChat, onConfirmCash }) {
   const [workerMapLocation, setWorkerMapLocation] = useState(request.workerLocation || null);
   const nextActionMap = {
     requested: "Accept Request",
@@ -2060,13 +2157,39 @@ function ProviderRequestDetailScreen({ request, onBack, onUpdateStatus, onCancel
           {isChatEnabledForRequest(request) ? (
             <PrimaryButton title="Message Customer" onPress={() => onOpenChat?.(request)} style={styles.workerActionButton} textStyle={styles.historyEntryButtonText} />
           ) : null}
+
+          {/* If the customer selected cash, show this to the worker! */}
+          {request.status === "started" && request.paymentMethod === "cash" && request.paymentStatus !== "paid" ? (
+            <PrimaryButton
+              title="Confirm Cash Received"
+              onPress={onConfirmCash}
+              style={[styles.workerActionButton, { backgroundColor: theme.success }]}
+              textStyle={styles.historyEntryButtonText}
+            />
+          ) : null}
+
           <PrimaryButton
             title={nextActionMap[request.status] || "Update"}
             onPress={onUpdateStatus}
             style={styles.workerActionButton}
             textStyle={styles.historyEntryButtonText}
-            disabled={request.status === "completed"}
+            /* Lock the button if it's completed, OR if it's started but unpaid */
+            disabled={request.status === "completed" || (request.status === "started" && request.paymentStatus !== "paid")}
           />
+          
+          {/* Real-time Payment Status Messages for the Worker */}
+          {request.status === "started" && request.paymentStatus !== "paid" ? (
+            <Text style={[styles.providerEmptyText, { marginTop: 8, color: theme.danger, fontWeight: "700" }]}>
+              Customer must process payment before you can mark this completed.
+            </Text>
+          ) : null}
+
+          {request.status === "started" && request.paymentStatus === "paid" ? (
+            <Text style={[styles.providerEmptyText, { marginTop: 8, color: theme.success, fontWeight: "800" }]}>
+              Payment Secured ({request.paymentMethod === "cash" ? "Cash" : "Online"}). You may now complete the service!
+            </Text>
+          ) : null}
+
           <PrimaryButton
             title="Cancel Request"
             onPress={onCancelRequest}
@@ -2105,6 +2228,9 @@ export default function App() {
   const [newAccountName, setNewAccountName] = useState("");
   const [requestForm, setRequestForm] = useState(emptyRequestForm);
   const [requestError, setRequestError] = useState("");
+  const [paymentModalVisible, setPaymentModalVisible] = useState(false);
+  const [paymentProcessing, setPaymentProcessing] = useState(false);
+  const [paymentSuccess, setPaymentSuccess] = useState(false);
   const [datePickerField, setDatePickerField] = useState(null);
   const [timePickerVisible, setTimePickerVisible] = useState(false);
   const [mapPickerVisible, setMapPickerVisible] = useState(false);
@@ -2582,7 +2708,57 @@ const optimisticRequest = {
     );
     setReviewPostedVisible(true);
   };
+const handleMockPayment = (method) => {
+    if (!selectedCustomerRequest) return;
+    setPaymentProcessing(true);
+    
+    setTimeout(async () => {
+      try {
+        if (method === "cash") {
+          // Cash logic: Just mark the method, waiting for worker to confirm
+          await updateDoc(doc(db, "requests", selectedCustomerRequest.id), {
+            paymentMethod: "cash",
+            updatedAt: serverTimestamp()
+          });
+        } else {
+          // Online logic: Instantly paid
+          await updateDoc(doc(db, "requests", selectedCustomerRequest.id), {
+            paymentMethod: "online",
+            paymentStatus: "paid",
+            updatedAt: serverTimestamp()
+          });
+        }
+        
+        setPaymentProcessing(false);
+        setPaymentSuccess(true);
+        
+        setTimeout(() => {
+          setPaymentModalVisible(false);
+          setPaymentSuccess(false);
+          loadCustomerRequests(currentUser.uid);
+        }, 2000);
 
+      } catch (error) {
+        console.error("Payment mock failed", error);
+        setPaymentProcessing(false);
+      }
+    }, 2000);
+  };
+
+  const handleWorkerConfirmCash = async () => {
+    if (!selectedWorkerRequest) return;
+    try {
+      await updateDoc(doc(db, "requests", selectedWorkerRequest.id), {
+        paymentStatus: "paid",
+        updatedAt: serverTimestamp()
+      });
+      const updatedRequest = { ...selectedWorkerRequest, paymentStatus: "paid" };
+      setSelectedWorkerRequest(updatedRequest);
+      setProviderRequests((current) => current.map((item) => (item.id === updatedRequest.id ? updatedRequest : item)));
+    } catch (error) {
+      console.error("Failed to confirm cash", error);
+    }
+  };
   const handleReschedule = async () => {
     if (!selectedCustomerRequest) return;
     if (!rescheduleForm.preferredDate || !rescheduleForm.preferredTime) return;
@@ -3524,6 +3700,7 @@ const optimisticRequest = {
             onUpdateStatus={advanceWorkerRequest}
             onCancelRequest={cancelWorkerRequest}
             onOpenChat={openChatForRequest}
+            onConfirmCash={handleWorkerConfirmCash} /* <-- ADD THIS LINE */
           />
         )}
         {screen.startsWith("offer-") && <OfferedServicesScreen service={selectedService} onBack={goBackToDashboard} />}
@@ -3577,6 +3754,7 @@ const optimisticRequest = {
           onCancel={() => setCancelConfirmVisible(true)}
           onDone={goBackToDashboard}
           onOpenChat={openChatForRequest}
+          onOpenPayment={() => setPaymentModalVisible(true)}
         />
       )}
       {screen.startsWith("proof-") && (
@@ -3602,6 +3780,10 @@ const optimisticRequest = {
             pendingReviewRequest={pendingReviewRequest}
             onViewMyReview={() => completedRequest && navigateTo("my-review", "forward")}
             onLeaveReview={() => pendingReviewRequest && openReviewForRequest(pendingReviewRequest)}
+            onOpenPayment={() => {
+              setSelectedCustomerRequest(pendingReviewRequest);
+              setPaymentModalVisible(true);
+            }}
           />
       )}
       {screen === "ongoing" && <OngoingRequestScreen onBack={goBackToDashboard} request={ongoingRequest} onViewStatus={() => ongoingRequest && openCustomerStatus(ongoingRequest)} />}
@@ -3777,7 +3959,16 @@ const optimisticRequest = {
             />
           </View>
         </View>
-      </Modal>
+        </Modal>
+
+        <PaymentCheckoutModal 
+          visible={paymentModalVisible} 
+          request={selectedCustomerRequest}
+          onClose={() => setPaymentModalVisible(false)}
+          onPay={handleMockPayment}
+          processing={paymentProcessing}
+          success={paymentSuccess}
+        />
         
       </Animated.View>
     </SafeAreaView>
@@ -5766,5 +5957,106 @@ const styles = StyleSheet.create({
     marginTop: 10,
     fontSize: 10,
     color: "#7a7a7a"
+  }, // <-- ADD THIS COMMA FIRST!
+
+  // THEN PASTE ALL THE NEW STYLES HERE:
+  paymentBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "flex-end"
+  },
+  paymentSheet: {
+    backgroundColor: "#fff",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    minHeight: 400
+  },
+  paymentHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 20
+  },
+  paymentTitle: {
+    fontSize: 20,
+    fontWeight: "900",
+    color: theme.text
+  },
+  paymentSummaryCard: {
+    backgroundColor: theme.blueSoft,
+    borderRadius: 16,
+    padding: 20,
+    alignItems: "center",
+    marginBottom: 24
+  },
+  paymentSummaryLabel: {
+    fontSize: 12,
+    color: theme.blueDark,
+    fontWeight: "700"
+  },
+  paymentSummaryAmount: {
+    fontSize: 32,
+    fontWeight: "900",
+    color: theme.navy,
+    marginVertical: 4
+  },
+  paymentSummaryDetail: {
+    fontSize: 12,
+    color: theme.blueDark
+  },
+  paymentMethodLabel: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: theme.text,
+    marginBottom: 12
+  },
+  paymentMethodCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 16,
+    borderWidth: 1,
+    borderColor: theme.border,
+    borderRadius: 12,
+    marginBottom: 10
+  },
+  paymentMethodIconBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12
+  },
+  paymentMethodText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: "700",
+    color: theme.text
+  },
+  paymentConfirmButton: {
+    width: "100%",
+    height: 52,
+    borderRadius: 16,
+    marginTop: 10,
+    backgroundColor: theme.blue
+  },
+  paymentSuccessContent: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 40
+  },
+  paymentSuccessTitle: {
+    fontSize: 22,
+    fontWeight: "900",
+    color: theme.success,
+    marginTop: 16,
+    marginBottom: 8
+  },
+  paymentSuccessText: {
+    fontSize: 14,
+    color: theme.muted,
+    textAlign: "center",
+    lineHeight: 20
   }
-});
+}); // <-- THIS IS THE ABSOLUTE LAST LINE OF YOUR FILE
